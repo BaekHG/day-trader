@@ -13,6 +13,7 @@ import pytz
 
 import config
 from ai_analyzer import AIAnalyzer
+from db import Database
 from kis_client import KISClient
 from market_data import MarketDataCollector
 from monitor import PositionMonitor
@@ -110,12 +111,13 @@ def run_daily_cycle():
     # --- Init ---
     kis = KISClient()
     bot = TelegramBot()
+    db = Database()
     naver_fin = NaverFinanceService()
     naver_news = NaverNewsService()
     collector = MarketDataCollector(kis, naver_fin, naver_news)
     analyzer = AIAnalyzer(config.OPENAI_API_KEY)
-    trader = Trader(kis, bot)
-    monitor = PositionMonitor(kis, bot)
+    trader = Trader(kis, bot, db)
+    monitor = PositionMonitor(kis, bot, db)
 
     # --- Weekend check ---
     if is_weekend():
@@ -133,7 +135,7 @@ def run_daily_cycle():
             + "\n".join(f"  {p['name']} {p['remaining_qty']}주" for p in monitor.positions.values())
         )
         _run_monitoring_loop(monitor, bot, kis)
-        _send_daily_report(monitor, bot)
+        _send_daily_report(monitor, bot, db)
         return
 
     # --- Phase 0: Wait until analysis time ---
@@ -182,6 +184,7 @@ def run_daily_cycle():
         return
 
     logger.info("AI 분석 완료 — 추천: %s", analysis.get("marketAssessment", {}).get("recommendation", "?"))
+    db.save_analysis(analysis)
 
     # --- Phase 4: Send analysis to Telegram ---
     logger.info("Phase 4 — 텔레그램 분석 결과 전송")
@@ -199,7 +202,7 @@ def run_daily_cycle():
         bot.send_message("오늘은 매매 비추천입니다. 기존 포지션만 모니터링합니다.")
         if monitor.positions:
             _run_monitoring_loop(monitor, bot, kis)
-        _send_daily_report(monitor, bot)
+        _send_daily_report(monitor, bot, db)
         return
 
     # --- Phase 6: Wait for buy confirmation ---
@@ -209,7 +212,7 @@ def run_daily_cycle():
         logger.info("매수 취소/시간초과")
         if monitor.positions:
             _run_monitoring_loop(monitor, bot, kis)
-        _send_daily_report(monitor, bot)
+        _send_daily_report(monitor, bot, db)
         return
 
     # --- Phase 7: Calculate & execute buy orders ---
@@ -217,7 +220,7 @@ def run_daily_cycle():
     orders = trader.calculate_orders(picks, config.TOTAL_CAPITAL)
     if not orders:
         bot.send_message("주문 가능한 종목이 없습니다.")
-        _send_daily_report(monitor, bot)
+        _send_daily_report(monitor, bot, db)
         return
 
     bot.send_buy_orders(orders)
@@ -234,7 +237,7 @@ def run_daily_cycle():
         bot.send_message("모든 매수 주문 실패. 모니터링 모드로 전환합니다.")
         if monitor.positions:
             _run_monitoring_loop(monitor, bot, kis)
-        _send_daily_report(monitor, bot)
+        _send_daily_report(monitor, bot, db)
         return
 
     # --- Phase 8: Wait for fills & add to monitor ---
@@ -277,7 +280,7 @@ def run_daily_cycle():
     _run_monitoring_loop(monitor, bot, kis)
 
     # --- Phase 10: Daily report ---
-    _send_daily_report(monitor, bot)
+    _send_daily_report(monitor, bot, db)
 
 
 def _run_monitoring_loop(monitor: PositionMonitor, bot: TelegramBot, kis: KISClient):
@@ -320,11 +323,19 @@ def _run_monitoring_loop(monitor: PositionMonitor, bot: TelegramBot, kis: KISCli
         time.sleep(config.CHECK_INTERVAL)
 
 
-def _send_daily_report(monitor: PositionMonitor, bot: TelegramBot):
-    """일일 리포트 전송."""
+def _send_daily_report(monitor: PositionMonitor, bot: TelegramBot, db: Database | None = None):
+    """일일 리포트 전송 + DB 저장."""
     logger.info("일일 리포트 생성")
     summary = monitor.get_daily_summary()
     bot.send_daily_report(summary)
+
+    if db:
+        remaining = [
+            {"code": code, "name": pos["name"], "qty": pos["remaining_qty"], "entry": pos["entry_price"]}
+            for code, pos in monitor.positions.items()
+        ]
+        db.save_daily_report(monitor.trades_today, remaining)
+
     logger.info("일일 리포트 전송 완료")
     logger.info("Day Trader 종료 — %s", now_kst().strftime("%H:%M"))
 

@@ -1,5 +1,6 @@
 import logging
 
+from db import Database
 from kis_client import KISClient
 from telegram_bot import TelegramBot
 
@@ -7,9 +8,10 @@ logger = logging.getLogger(__name__)
 
 
 class Trader:
-    def __init__(self, kis: KISClient, bot: TelegramBot):
+    def __init__(self, kis: KISClient, bot: TelegramBot, db: Database | None = None):
         self.kis = kis
         self.bot = bot
+        self.db = db
 
     def calculate_orders(self, picks: list[dict], total_capital: int) -> list[dict]:
         orders = []
@@ -51,6 +53,15 @@ class Trader:
                 results.append({**order, "success": success, "message": msg})
                 if success:
                     logger.info("매수 주문 성공: %s %d주 × %s원", order["name"], order["quantity"], f"{order['price']:,}")
+                    if self.db:
+                        self.db.save_trade(
+                            stock_code=order["stock_code"],
+                            stock_name=order["name"],
+                            action="buy",
+                            quantity=order["quantity"],
+                            price=order["price"],
+                            reason="AI 추천 매수",
+                        )
                 else:
                     logger.error("매수 주문 실패: %s — %s", order["name"], msg)
             except Exception as e:

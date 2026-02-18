@@ -43,6 +43,9 @@ NAVER_FALLBACK_NAMES = {
     "003670": "포스코퓨처엠",
 }
 
+SUPABASE_URL = os.getenv("SUPABASE_URL", "")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY", "")
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 POSITIONS_FILE = os.path.join(BASE_DIR, "positions.json")
 TOKEN_CACHE_FILE = os.path.join(BASE_DIR, ".token_cache.json")

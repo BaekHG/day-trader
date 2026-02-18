@@ -5,6 +5,7 @@ from datetime import datetime
 import pytz
 
 import config
+from db import Database
 from kis_client import KISClient
 from telegram_bot import TelegramBot
 
@@ -13,9 +14,10 @@ KST = pytz.timezone("Asia/Seoul")
 
 
 class PositionMonitor:
-    def __init__(self, kis: KISClient, bot: TelegramBot):
+    def __init__(self, kis: KISClient, bot: TelegramBot, db: Database | None = None):
         self.kis = kis
         self.bot = bot
+        self.db = db
         self.positions: dict[str, dict] = {}
         self.trades_today: list[dict] = []
         self.should_stop = False
@@ -133,6 +135,18 @@ class PositionMonitor:
                 "entry": entry, "exit": price,
                 "pnl_amt": pnl_amt, "pnl_pct": round(pnl_pct, 1), "reason": reason,
             })
+
+            if self.db:
+                self.db.save_trade(
+                    stock_code=code,
+                    stock_name=name,
+                    action="sell",
+                    quantity=qty,
+                    price=price,
+                    reason=reason,
+                    pnl_amount=pnl_amt,
+                    pnl_pct=pnl_pct,
+                )
 
             if pos["remaining_qty"] <= qty:
                 self.remove_position(code)
