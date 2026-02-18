@@ -31,12 +31,13 @@ jobs:
             monitor/telegram_bot.py \
             monitor/main.py \
             monitor/requirements.txt \
-            ai-shorts-server:~/day-trader/
+            harry@ai-shorts-server:/home/harry/day-trader/
 
-      - name: Install dependencies & restart
+      - name: Install dependencies & verify
         run: |
-          gcloud compute ssh ai-shorts-server --zone=asia-northeast3-a --command="
-            cd ~/day-trader &&
+          gcloud compute ssh harry@ai-shorts-server --zone=asia-northeast3-a --command="
+            cd /home/harry/day-trader &&
+            test -d venv || python3 -m venv venv &&
             source venv/bin/activate &&
             pip install -q -r requirements.txt &&
             python3 -c 'from telegram_bot import TelegramBot; TelegramBot().send_message(\"Deploy complete\")' &&
