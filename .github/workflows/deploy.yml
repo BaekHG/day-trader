@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'monitor/**'
+      - '.github/workflows/deploy.yml'
 
 jobs:
   deploy:
