@@ -36,6 +36,33 @@ def _to_kis_format(naver: dict) -> dict:
 
 class NaverFinanceService:
 
+    def get_market_cap_ranking(self, count: int = 20) -> list[dict]:
+        all_stocks = []
+        try:
+            for market in ("KOSPI", "KOSDAQ"):
+                resp = requests.get(
+                    f"{_BASE}/marketValue/{market}",
+                    params={"page": 1, "pageSize": 30},
+                    timeout=8,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if isinstance(data, dict):
+                    all_stocks.extend(data.get("stocks", []))
+        except Exception as e:
+            logger.error("네이버 시가총액 순위 조회 실패: %s", e)
+            return []
+
+        seen = set()
+        unique = []
+        for s in all_stocks:
+            code = s.get("itemCode", "")
+            if code and code not in seen:
+                seen.add(code)
+                unique.append(s)
+
+        return [_to_kis_format(s) for s in unique[:count]]
+
     def get_volume_ranking(self, count: int = 10) -> list[dict]:
         all_stocks = []
         try:

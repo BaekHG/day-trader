@@ -138,8 +138,14 @@ class MarketDataCollector:
                 return ranking
         except Exception as e:
             logger.warning("KIS 거래량 순위 실패: %s", e)
+
         logger.info("네이버 거래량 순위 fallback")
-        return self.naver_fin.get_volume_ranking(count=20)
+        ranking = self.naver_fin.get_volume_ranking(count=20)
+        if ranking:
+            return ranking
+
+        logger.info("네이버 시가총액 순위 fallback (장전)")
+        return self.naver_fin.get_market_cap_ranking(count=20)
 
     def _get_up_ranking(self) -> list[dict]:
         try:
@@ -148,7 +154,8 @@ class MarketDataCollector:
                 return ranking
         except Exception as e:
             logger.warning("KIS 상승 순위 실패: %s", e)
-        return self.naver_fin.get_up_ranking()
+        ranking = self.naver_fin.get_up_ranking()
+        return ranking if ranking else []
 
     def _get_down_ranking(self) -> list[dict]:
         try:
@@ -157,7 +164,8 @@ class MarketDataCollector:
                 return ranking
         except Exception as e:
             logger.warning("KIS 하락 순위 실패: %s", e)
-        return self.naver_fin.get_down_ranking()
+        ranking = self.naver_fin.get_down_ranking()
+        return ranking if ranking else []
 
     def _collect_news(self, volume_ranking: list[dict]) -> dict:
         news = {}
