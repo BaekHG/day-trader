@@ -1,0 +1,44 @@
+name: Deploy to GCE
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'monitor/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCE_SA_KEY }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy monitor to GCE
+        run: |
+          gcloud compute scp --zone=asia-northeast3-a --recurse \
+            monitor/config.py \
+            monitor/kis_client.py \
+            monitor/naver_data.py \
+            monitor/market_data.py \
+            monitor/ai_analyzer.py \
+            monitor/trader.py \
+            monitor/monitor.py \
+            monitor/telegram_bot.py \
+            monitor/main.py \
+            monitor/requirements.txt \
+            ai-shorts-server:~/day-trader/
+
+      - name: Install dependencies & restart
+        run: |
+          gcloud compute ssh ai-shorts-server --zone=asia-northeast3-a --command="
+            cd ~/day-trader &&
+            source venv/bin/activate &&
+            pip install -q -r requirements.txt &&
+            python3 -c 'from telegram_bot import TelegramBot; TelegramBot().send_message(\"Deploy complete\")' &&
+            echo 'Deploy OK'
+          "
