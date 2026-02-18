@@ -48,3 +48,4 @@ POSITIONS_FILE = os.path.join(BASE_DIR, "positions.json")
 TOKEN_CACHE_FILE = os.path.join(BASE_DIR, ".token_cache.json")
 TRADES_FILE = os.path.join(BASE_DIR, "trades_today.json")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
+VERSION = "1.0.0"
