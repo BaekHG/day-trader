@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytz
 
@@ -345,16 +345,26 @@ def _send_daily_report(monitor: PositionMonitor, bot: TelegramBot, db: Database 
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _sleep_until_midnight():
+    n = now_kst()
+    tomorrow = (n + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    seconds = (tomorrow - n).total_seconds()
+    logger.info("다음 사이클까지 %.0f초 대기 (00:00 KST)", seconds)
+    time.sleep(max(seconds, 60))
+
+
 if __name__ == "__main__":
-    try:
-        run_daily_cycle()
-    except KeyboardInterrupt:
-        logger.info("사용자 중단 (Ctrl+C)")
-    except Exception as e:
-        logger.exception("예상치 못한 오류: %s", e)
+    while True:
         try:
-            bot = TelegramBot()
-            bot.send_message(f"❌ Day Trader 오류 발생: {e}")
-        except Exception:
-            pass
-        sys.exit(1)
+            run_daily_cycle()
+        except KeyboardInterrupt:
+            logger.info("사용자 중단 (Ctrl+C)")
+            break
+        except Exception as e:
+            logger.exception("예상치 못한 오류: %s", e)
+            try:
+                bot = TelegramBot()
+                bot.send_message(f"❌ Day Trader 오류 발생: {e}")
+            except Exception:
+                pass
+        _sleep_until_midnight()

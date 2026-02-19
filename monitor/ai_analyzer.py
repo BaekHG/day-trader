@@ -154,7 +154,7 @@ class AIAnalyzer:
                 "messages": [
                     {"role": "user", "content": user_prompt},
                 ],
-                "temperature": 0.2,
+                "temperature": 0,
             },
             timeout=90,
         )

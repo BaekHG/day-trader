@@ -132,7 +132,7 @@ picks 배열은 rank 1~3 순서로 최대 3개 종목을 포함한다.
           'messages': [
             {'role': 'user', 'content': userPrompt},
           ],
-          'temperature': 0.2,
+          'temperature': 0,
         },
       );
 
