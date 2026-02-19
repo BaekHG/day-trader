@@ -11,10 +11,16 @@ abstract final class AppConstants {
   static const String kisWebSocket = 'ws://ops.koreainvestment.com:21000';
 
   static String get openaiApiKey => dotenv.get('OPENAI_API_KEY', fallback: '');
+  static String get anthropicApiKey =>
+      dotenv.get('ANTHROPIC_API_KEY', fallback: '');
 
   static String get alpacaApiKey => dotenv.get('ALPACA_API_KEY', fallback: '');
   static String get alpacaApiSecret =>
       dotenv.get('ALPACA_API_SECRET', fallback: '');
+
+  static String get supabaseUrl => dotenv.get('SUPABASE_URL', fallback: '');
+  static String get supabaseAnonKey =>
+      dotenv.get('SUPABASE_ANON_KEY', fallback: '');
   static const String alpacaDataBase = 'https://data.alpaca.markets';
   static const String alpacaTradingBase = 'https://api.alpaca.markets';
   static const String alpacaStream = 'wss://stream.data.alpaca.markets/v2/iex';
