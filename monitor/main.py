@@ -242,25 +242,23 @@ def run_daily_cycle():
         return
 
     # --- Phase 8: Wait for fills & add to monitor ---
-    logger.info("Phase 8 — 체결 대기")
-    time.sleep(5)  # 체결 대기
-
-    # 최대 3번 체결 확인 시도 (5초 간격)
+    logger.info("Phase 8 — 체결 대기 (15초 간격, 최대 3분)")
+    order_map = {o["stock_code"]: o for o in success_orders}
     fills = []
-    for attempt in range(3):
-        fills = trader.check_fills(orders)
-        if fills:
+    for attempt in range(12):
+        time.sleep(15)
+        fills = trader.check_fills(success_orders)
+        filled_names = [f["name"] for f in fills]
+        logger.info("체결 %d/%d — %s (시도 %d/12)",
+                     len(fills), len(success_orders),
+                     ", ".join(filled_names) or "없음", attempt + 1)
+        if len(fills) >= len(success_orders):
             break
-        logger.info("체결 대기 중... (시도 %d/3)", attempt + 1)
-        time.sleep(5)
 
     if fills:
         bot.send_fill_confirmation(fills)
         for f in fills:
-            # 매칭되는 주문에서 target/stop 정보 가져오기
-            matching_order = next(
-                (o for o in orders if o["stock_code"] == f["stock_code"]), None
-            )
+            matching_order = order_map.get(f["stock_code"])
             if matching_order:
                 monitor.add_position(
                     stock_code=f["stock_code"],
@@ -272,9 +270,52 @@ def run_daily_cycle():
                     stop_loss=matching_order["stop_loss"],
                     sell_strategy=matching_order.get("sell_strategy"),
                 )
-    else:
-        bot.send_message("⚠️ 체결 확인 불가 — 수동으로 확인해주세요. /balance 명령어로 확인 가능합니다.")
-        # 주문은 넣었으니 모니터링은 계속 (체결 확인 실패해도 포지션 수동 추가 가능)
+
+    # --- Phase 8.5: 미체결 주문 재분석 + 재주문 ---
+    try:
+        pending = kis.get_pending_orders()
+    except Exception as e:
+        logger.error("미체결 조회 실패: %s", e)
+        pending = []
+
+    if pending:
+        logger.info("Phase 8.5 — 미체결 %d건 재분석", len(pending))
+        bot.send_message(
+            f"⏳ 미체결 {len(pending)}건 — 재분석 진행\n"
+            + "\n".join(f"  {p['name']} 잔여 {p['remaining_qty']}주 × {p['order_price']:,}원" for p in pending)
+        )
+
+        for p in pending:
+            orig = order_map.get(p["stock_code"], {})
+            p["reason"] = orig.get("reason", "AI 추천 매수")
+            p["target1"] = orig.get("target1", 0)
+            p["target2"] = orig.get("target2", 0)
+            p["stop_loss"] = orig.get("stop_loss", 0)
+            p["sell_strategy"] = orig.get("sell_strategy")
+
+        cancelled = trader.cancel_unfilled_orders(pending)
+
+        if cancelled:
+            time.sleep(2)
+            retry_results = trader.retry_with_reanalysis(cancelled, analyzer)
+
+            for r in retry_results:
+                if r.get("retried") and r.get("success"):
+                    time.sleep(10)
+                    retry_fills = trader.check_fills([r])
+                    for rf in retry_fills:
+                        monitor.add_position(
+                            stock_code=rf["stock_code"],
+                            name=rf["name"],
+                            quantity=rf["quantity"],
+                            entry_price=rf["price"],
+                            target1=r.get("target1", 0),
+                            target2=r.get("target2", 0),
+                            stop_loss=r.get("stop_loss", 0),
+                            sell_strategy=r.get("sell_strategy"),
+                        )
+    elif not fills:
+        bot.send_message("⚠️ 체결 확인 불가 — /balance 명령어로 수동 확인해주세요.")
 
     # --- Phase 9: Monitoring loop ---
     logger.info("Phase 9 — 모니터링 시작")

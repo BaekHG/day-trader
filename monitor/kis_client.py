@@ -129,6 +129,56 @@ class KISClient:
         resp.raise_for_status()
         return int(resp.json().get("output", {}).get("ord_psbl_cash", 0))
 
+    def cancel_order(
+        self, krx_fwdg_ord_orgno: str, orgn_odno: str, quantity: int,
+    ) -> dict:
+        """미체결 주문 취소. TTTC0803U (실전)."""
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl"
+        body = {
+            "CANO": config.KIS_CANO,
+            "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
+            "KRX_FWDG_ORD_ORGNO": krx_fwdg_ord_orgno,
+            "ORGN_ODNO": orgn_odno,
+            "ORD_DVSN": "00",
+            "RVSE_CNCL_DVSN_CD": "02",
+            "ORD_QTY": str(quantity),
+            "ORD_UNPR": "0",
+            "QTY_ALL_ORD_YN": "Y",
+        }
+        resp = requests.post(url, headers=self._headers("TTTC0803U"), json=body, timeout=10)
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_pending_orders(self) -> list[dict]:
+        """당일 미체결 매수 주문 조회. TTTC8001R + CCLD_DVSN=02."""
+        url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        today = datetime.now(KST).strftime("%Y%m%d")
+        params = {
+            "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
+            "INQR_STRT_DT": today, "INQR_END_DT": today,
+            "SLL_BUY_DVSN_CD": "02",
+            "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "02",
+            "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+        }
+        resp = requests.get(url, headers=self._headers("TTTC8001R"), params=params, timeout=10)
+        resp.raise_for_status()
+        pending = []
+        for item in resp.json().get("output1", []):
+            rmn_qty = int(item.get("rmn_qty", 0))
+            if rmn_qty > 0:
+                pending.append({
+                    "stock_code": item.get("pdno", ""),
+                    "name": item.get("prdt_name", ""),
+                    "order_qty": int(item.get("ord_qty", 0)),
+                    "filled_qty": int(item.get("tot_ccld_qty", 0)),
+                    "remaining_qty": rmn_qty,
+                    "order_price": int(float(item.get("ord_unpr", 0))),
+                    "odno": item.get("odno", ""),
+                    "ord_gno_brno": item.get("ord_gno_brno", ""),
+                })
+        return pending
+
     def get_order_fills(self) -> list[dict]:
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
         today = datetime.now(KST).strftime("%Y%m%d")

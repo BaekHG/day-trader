@@ -193,6 +193,77 @@ class AIAnalyzer:
         logger.info("OpenAI 분석 완료 — 토큰 사용: %s", data.get("usage", {}))
         return parsed
 
+    def reanalyze_entry(
+        self,
+        stock_name: str,
+        stock_code: str,
+        original_price: int,
+        current_price: int,
+        original_reason: str,
+    ) -> dict:
+        price_diff_pct = ((current_price - original_price) / original_price) * 100
+        prompt = (
+            f"기존에 {stock_name}({stock_code})을 {original_price:,}원에 지정가 매수 주문했으나 미체결되었습니다.\n"
+            f"현재가: {current_price:,}원 (주문가 대비 {price_diff_pct:+.1f}%)\n"
+            f"기존 매수 근거: {original_reason}\n\n"
+            f"현재가 {current_price:,}원에 매수 진입해도 괜찮은지 판단해주세요.\n"
+            f"단타(1~3일) 관점에서 현재가 대비 리스크/리워드를 분석하세요.\n\n"
+            "반드시 아래 JSON 형식으로만 응답하세요. "
+            "절대로 JSON 외의 텍스트를 포함하지 마세요. 첫 문자는 반드시 { 이어야 합니다:\n"
+            '{\n'
+            '  "should_buy": true 또는 false,\n'
+            '  "reason": "판단 근거 (한국어, 2-3문장)",\n'
+            '  "suggested_price": 추천매수가격(정수)\n'
+            '}'
+        )
+
+        if self.provider == "anthropic":
+            return self._call_anthropic_light(prompt)
+        return self._call_openai_light(prompt)
+
+    def _call_anthropic_light(self, prompt: str) -> dict:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 500,
+                "system": "너는 한국 주식 단타 전문가다. 미체결 주문의 현재가 재진입 여부를 판단한다. 순수 JSON만 출력하라.",
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        content = resp.json()["content"][0]["text"]
+        return self._extract_json(content)
+
+    def _call_openai_light(self, prompt: str) -> dict:
+        resp = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}",
+            },
+            json={
+                "model": "gpt-4o",
+                "messages": [
+                    {"role": "system", "content": "너는 한국 주식 단타 전문가다. 미체결 주문의 현재가 재진입 여부를 판단한다."},
+                    {"role": "user", "content": prompt},
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0,
+                "max_tokens": 500,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return json.loads(resp.json()["choices"][0]["message"]["content"])
+
     def _build_user_prompt(
         self,
         enriched_stocks: list[dict],
