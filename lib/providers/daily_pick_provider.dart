@@ -4,14 +4,14 @@ import '../core/constants/app_constants.dart';
 import '../models/daily_pick.dart';
 import '../services/kis/kis_api_service.dart';
 import '../services/naver/naver_news_service.dart';
-import '../services/openai/openai_service.dart';
+import '../services/claude/claude_service.dart';
 import 'market_data_provider.dart';
 
 export '../services/naver/naver_news_service.dart' show NewsArticle;
 import 'stock_provider.dart';
 
-final openAiServiceProvider = Provider<OpenAiService>((ref) {
-  final service = OpenAiService(apiKey: AppConstants.openaiApiKey);
+final claudeServiceProvider = Provider<ClaudeService>((ref) {
+  final service = ClaudeService(apiKey: AppConstants.anthropicApiKey);
   ref.onDispose(service.dispose);
   return service;
 });
@@ -28,7 +28,7 @@ final dailyPicksProvider =
     ) {
       return DailyPicksNotifier(
         kisService: ref.watch(kisApiServiceProvider),
-        openAiService: ref.watch(openAiServiceProvider),
+        claudeService: ref.watch(claudeServiceProvider),
         naverNewsService: ref.watch(naverNewsServiceProvider),
       );
     });
@@ -36,12 +36,12 @@ final dailyPicksProvider =
 class DailyPicksNotifier extends StateNotifier<AsyncValue<DailyPicksResult?>> {
   DailyPicksNotifier({
     required this.kisService,
-    required this.openAiService,
+    required this.claudeService,
     required this.naverNewsService,
   }) : super(const AsyncValue.data(null));
 
   final KisApiService kisService;
-  final OpenAiService openAiService;
+  final ClaudeService claudeService;
   final NaverNewsService naverNewsService;
 
   DailyPicksResult? _cachedResult;
@@ -133,8 +133,7 @@ class DailyPicksNotifier extends StateNotifier<AsyncValue<DailyPicksResult?>> {
 
       final enrichedStocks = await Future.wait(enrichFutures);
 
-      // Only this call costs money (~100원)
-      final result = await openAiService.analyzeDailyPicks(
+      final result = await claudeService.analyzeDailyPicks(
         enrichedStocks: enrichedStocks.cast<Map<String, dynamic>>(),
         upRanking: marketData.upRanking,
         downRanking: marketData.downRanking,
@@ -197,8 +196,7 @@ class DailyPicksNotifier extends StateNotifier<AsyncValue<DailyPicksResult?>> {
         }
       }
 
-      // Step 3: Send to OpenAI
-      final result = await openAiService.analyzeDailyPicks(
+      final result = await claudeService.analyzeDailyPicks(
         enrichedStocks: enrichedStocks,
         upRanking: upRanking,
         downRanking: downRanking,
