@@ -187,12 +187,19 @@ def run_daily_cycle():
     logger.info("AI 분석 완료 — 추천: %s", analysis.get("marketAssessment", {}).get("recommendation", "?"))
     db.save_analysis(analysis)
 
+    try:
+        available_cash = kis.get_available_cash()
+        logger.info("주문 가능 현금: %s원", f"{available_cash:,}")
+    except Exception as e:
+        logger.warning("현금 조회 실패, 설정값 사용: %s", e)
+        available_cash = config.TOTAL_CAPITAL
+
     # --- Phase 4: Send analysis to Telegram ---
     logger.info("Phase 4 — 텔레그램 분석 결과 전송")
     analysis["_kospi"] = market_data["kospi_index"]
     analysis["_kosdaq"] = market_data["kosdaq_index"]
     analysis["_exchange_rate"] = market_data["exchange_rate"]
-    bot.send_analysis_result(analysis, config.TOTAL_CAPITAL)
+    bot.send_analysis_result(analysis, available_cash)
 
     # --- Phase 5: Check recommendation ---
     recommendation = analysis.get("marketAssessment", {}).get("recommendation", "")
@@ -218,7 +225,7 @@ def run_daily_cycle():
 
     # --- Phase 7: Calculate & execute buy orders ---
     logger.info("Phase 7 — 매수 주문 실행")
-    orders = trader.calculate_orders(picks, config.TOTAL_CAPITAL)
+    orders = trader.calculate_orders(picks, available_cash)
     if not orders:
         bot.send_message("주문 가능한 종목이 없습니다.")
         _send_daily_report(monitor, bot, db)
