@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from datetime import datetime
 
 import pytz
@@ -38,7 +39,9 @@ SYSTEM_PROMPT = """역할:
 - 확신이 높은 종목에 더 많은 비중을 배분하라 (예: 50/30/20 또는 40/35/25)
 - 3종목 미만만 추천할 만한 경우, 나머지는 "현금보유"로 배분하라
 
-반드시 아래 JSON 형식으로만 응답하세요:
+반드시 아래 JSON 형식으로만 응답하세요.
+절대로 ```json 코드블록, 설명, 주석, 마크다운 등 JSON 외의 텍스트를 포함하지 마세요.
+순수 JSON만 출력하세요. 첫 문자는 반드시 { 이어야 합니다:
 {
   "marketAssessment": {
     "score": 단타적합도점수(0-100),
@@ -87,8 +90,9 @@ picks 배열은 rank 1~3 순서로 최대 3개 종목을 포함한다.
 
 
 class AIAnalyzer:
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, provider: str = "anthropic"):
         self.api_key = api_key
+        self.provider = provider
 
     def analyze(
         self,
@@ -105,6 +109,65 @@ class AIAnalyzer:
             kospi_index, kosdaq_index, exchange_rate, is_market_open,
         )
 
+        if self.provider == "anthropic":
+            return self._call_anthropic(user_prompt)
+        return self._call_openai(user_prompt)
+
+    @staticmethod
+    def _extract_json(text: str) -> dict:
+        stripped = text.strip()
+        if stripped.startswith("{"):
+            try:
+                return json.loads(stripped)
+            except json.JSONDecodeError:
+                pass
+
+        md_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+        if md_match:
+            try:
+                return json.loads(md_match.group(1).strip())
+            except json.JSONDecodeError:
+                pass
+
+        first = text.find("{")
+        last = text.rfind("}")
+        if first != -1 and last != -1 and last > first:
+            try:
+                return json.loads(text[first:last + 1])
+            except json.JSONDecodeError:
+                pass
+
+        raise ValueError(f"Claude 응답에서 유효한 JSON을 추출할 수 없습니다: {text[:200]}...")
+
+    def _call_anthropic(self, user_prompt: str) -> dict:
+        resp = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "Content-Type": "application/json",
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+            },
+            json={
+                "model": "claude-sonnet-4-20250514",
+                "max_tokens": 6000,
+                "system": SYSTEM_PROMPT,
+                "messages": [
+                    {"role": "user", "content": user_prompt},
+                ],
+                "temperature": 0.2,
+            },
+            timeout=90,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["content"][0]["text"]
+        parsed = self._extract_json(content)
+        usage = data.get("usage", {})
+        logger.info("Claude 분석 완료 — 토큰: input=%s output=%s",
+                     usage.get("input_tokens", "?"), usage.get("output_tokens", "?"))
+        return parsed
+
+    def _call_openai(self, user_prompt: str) -> dict:
         resp = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={
@@ -127,7 +190,7 @@ class AIAnalyzer:
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
         parsed = json.loads(content)
-        logger.info("AI 분석 완료 — 토큰 사용: %s", data.get("usage", {}))
+        logger.info("OpenAI 분석 완료 — 토큰 사용: %s", data.get("usage", {}))
         return parsed
 
     def _build_user_prompt(

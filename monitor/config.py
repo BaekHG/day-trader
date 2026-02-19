@@ -24,10 +24,9 @@ TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "2.0"))  # % drop from 
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "10"))  # seconds
 TELEGRAM_MIN_INTERVAL = 60  # seconds between repeated alerts per stock
 
-OPENAI_API_KEY = os.getenv(
-    "OPENAI_API_KEY",
-    "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",
-)
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic")  # "anthropic" or "openai"
 TOTAL_CAPITAL = int(os.getenv("TOTAL_CAPITAL", "3000000"))
 ANALYSIS_TIME = os.getenv("ANALYSIS_TIME", "08:40")
 BUY_CONFIRM_TIMEOUT = int(os.getenv("BUY_CONFIRM_TIMEOUT", "900"))

@@ -115,7 +115,8 @@ def run_daily_cycle():
     naver_fin = NaverFinanceService()
     naver_news = NaverNewsService()
     collector = MarketDataCollector(kis, naver_fin, naver_news)
-    analyzer = AIAnalyzer(config.OPENAI_API_KEY)
+    ai_key = config.ANTHROPIC_API_KEY if config.AI_PROVIDER == "anthropic" else config.OPENAI_API_KEY
+    analyzer = AIAnalyzer(ai_key, provider=config.AI_PROVIDER)
     trader = Trader(kis, bot, db)
     monitor = PositionMonitor(kis, bot, db)
 
