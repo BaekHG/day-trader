@@ -41,6 +41,9 @@ jobs:
             test -d venv || python3 -m venv venv &&
             source venv/bin/activate &&
             pip install -q -r requirements.txt &&
-            python3 -c 'from telegram_bot import TelegramBot; TelegramBot().send_message(\"Deploy complete\")' &&
+            sudo systemctl restart day-trader.service &&
+            sleep 3 &&
+            sudo systemctl is-active day-trader.service &&
+            python3 -c 'from telegram_bot import TelegramBot; TelegramBot().send_message(\"Deploy + Restart complete\")' &&
             echo 'Deploy OK'
           "
