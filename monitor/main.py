@@ -108,6 +108,80 @@ def _past_entry_cutoff() -> bool:
     return n.hour > hh or (n.hour == hh and n.minute >= mm)
 
 
+def _try_reinvest(
+    kis: KISClient, bot: TelegramBot, collector: MarketDataCollector,
+    analyzer: AIAnalyzer, trader: Trader, monitor: PositionMonitor,
+    sold_codes: set,
+) -> None:
+    if _past_entry_cutoff():
+        return
+    try:
+        remaining_cash = kis.get_available_cash()
+    except Exception as e:
+        logger.warning("잔여 현금 조회 실패: %s", e)
+        return
+    if remaining_cash < config.MIN_REINVEST_CASH:
+        return
+
+    skip_codes = set(monitor.positions.keys()) | sold_codes
+    logger.info("잔여 현금 재투자 — %s원 추가 종목 탐색", f"{remaining_cash:,}")
+    bot.send_message(f"💰 잔여 현금 {remaining_cash:,}원 — 추가 종목 분석")
+
+    try:
+        mdata = collector.fetch_market_data()
+        enr = collector.enrich_stocks(
+            mdata["volume_ranking"], mdata["stock_news"], mdata["is_market_open"],
+        )
+        anal = analyzer.analyze(
+            enriched_stocks=enr, up_ranking=mdata["up_ranking"],
+            down_ranking=mdata["down_ranking"], kospi_index=mdata["kospi_index"],
+            kosdaq_index=mdata["kosdaq_index"], exchange_rate=mdata["exchange_rate"],
+            is_market_open=mdata["is_market_open"],
+        )
+        rec = anal.get("marketAssessment", {}).get("recommendation", "")
+        if rec == "매매비추천":
+            bot.send_message("재투자 분석: 매매비추천 — 패스")
+            return
+
+        new_picks = [p for p in anal.get("picks", []) if p["symbol"] not in skip_codes]
+        if not new_picks:
+            bot.send_message("추가 매수 대상 없음")
+            return
+
+        new_orders = trader.calculate_orders(new_picks, remaining_cash, skip_codes)
+        if not new_orders:
+            return
+
+        bot.send_buy_orders(new_orders)
+        new_results = trader.execute_buy_orders(new_orders)
+        new_success = [r for r in new_results if r["success"]]
+        if not new_success:
+            return
+
+        new_map = {o["stock_code"]: o for o in new_success}
+        new_fills = []
+        for attempt in range(4):
+            time.sleep(15)
+            new_fills = trader.check_fills(new_success)
+            if len(new_fills) >= len(new_success):
+                break
+        if new_fills:
+            bot.send_fill_confirmation(new_fills)
+            for nf in new_fills:
+                mo = new_map.get(nf["stock_code"])
+                if mo:
+                    monitor.add_position(
+                        stock_code=nf["stock_code"], name=nf["name"],
+                        quantity=nf["quantity"], entry_price=nf["price"],
+                        target1=mo["target1"], target2=mo["target2"],
+                        stop_loss=mo["stop_loss"],
+                        sell_strategy=mo.get("sell_strategy"),
+                    )
+                    sold_codes.add(nf["stock_code"])
+    except Exception as e:
+        logger.error("잔여 현금 재투자 실패: %s", e)
+
+
 def _get_daily_pnl_pct(monitor: PositionMonitor) -> float:
     total_pnl = sum(t.get("pnl_amt", 0) for t in monitor.trades_today)
     if config.TOTAL_CAPITAL <= 0:
@@ -141,13 +215,18 @@ def run_daily_cycle():
 
     bot.send_message(f"🔔 Day Trader 시작 ({now_kst().strftime('%Y.%m.%d %H:%M')})")
 
+    sold_codes: set[str] = set()
+    sold_codes.update(t["code"] for t in monitor.trades_today if "code" in t)
+
     if monitor.positions and past_analysis_time():
         logger.info("기존 포지션 %d개 감지 — 모니터링 재개", len(monitor.positions))
         bot.send_message(
             f"기존 포지션 {len(monitor.positions)}개 감지 — 모니터링 재개\n"
             + "\n".join(f"  {p['name']} {p['remaining_qty']}주" for p in monitor.positions.values())
         )
-        exit_reason = _run_monitoring_loop(monitor, bot, kis)
+        exit_reason = _run_monitoring_loop(
+            monitor, bot, kis, collector, analyzer, trader, sold_codes,
+        )
         if exit_reason == "positions_cleared" and not _past_entry_cutoff():
             logger.info("포지션 청산 — 추가 사이클 가능, 멀티사이클 진입")
         else:
@@ -156,9 +235,6 @@ def run_daily_cycle():
 
     if not past_analysis_time():
         wait_until(config.ANALYSIS_TIME, bot, kis, monitor)
-
-    sold_codes: set[str] = set()
-    sold_codes.update(t["code"] for t in monitor.trades_today if "code" in t)
 
     for cycle in range(config.MAX_CYCLES):
         logger.info("━━━ 사이클 %d/%d 시작 ━━━", cycle + 1, config.MAX_CYCLES)
@@ -275,7 +351,7 @@ def _run_one_cycle(
         logger.info("매매 비추천 — 매수 없이 모니터링 모드")
         bot.send_message("매매 비추천 — 기존 포지션만 모니터링합니다.")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis)
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "no_picks"
 
     if cycle == 0:
@@ -284,7 +360,7 @@ def _run_one_cycle(
         if not confirmed:
             logger.info("매수 취소/시간초과")
             if monitor.positions:
-                return _run_monitoring_loop(monitor, bot, kis)
+                return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
             return "user_cancel"
     else:
         bot.send_message(f"🔄 사이클 {cycle + 1} — 자동 매수 진행")
@@ -294,7 +370,7 @@ def _run_one_cycle(
     if not orders:
         bot.send_message("주문 가능한 종목이 없습니다.")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis)
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "no_orders"
 
     bot.send_buy_orders(orders)
@@ -310,7 +386,7 @@ def _run_one_cycle(
     if not success_orders:
         bot.send_message("모든 매수 주문 실패.")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis)
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "all_failed"
 
     logger.info("Phase 8 — 체결 대기 (15초 간격, 최대 3분)")
@@ -387,66 +463,19 @@ def _run_one_cycle(
     elif not fills:
         bot.send_message("⚠️ 체결 확인 불가 — /balance 명령어로 수동 확인해주세요.")
 
-    skip_codes = set(monitor.positions.keys()) | {o["stock_code"] for o in orders} | sold_codes
-    try:
-        remaining_cash = kis.get_available_cash()
-    except Exception as e:
-        logger.warning("잔여 현금 조회 실패: %s", e)
-        remaining_cash = 0
-
-    if remaining_cash >= config.MIN_REINVEST_CASH:
-        logger.info("Phase 8.7 — 잔여 현금 %s원 추가 종목 탐색", f"{remaining_cash:,}")
-        bot.send_message(f"💰 잔여 현금 {remaining_cash:,}원 — 추가 종목 분석")
-        try:
-            mdata = collector.fetch_market_data()
-            enr = collector.enrich_stocks(
-                mdata["volume_ranking"], mdata["stock_news"], mdata["is_market_open"],
-            )
-            anal = analyzer.analyze(
-                enriched_stocks=enr, up_ranking=mdata["up_ranking"],
-                down_ranking=mdata["down_ranking"], kospi_index=mdata["kospi_index"],
-                kosdaq_index=mdata["kosdaq_index"], exchange_rate=mdata["exchange_rate"],
-                is_market_open=mdata["is_market_open"],
-            )
-            new_picks = [p for p in anal.get("picks", []) if p["symbol"] not in skip_codes]
-            if new_picks:
-                new_orders = trader.calculate_orders(new_picks, remaining_cash, skip_codes)
-                if new_orders:
-                    bot.send_buy_orders(new_orders)
-                    new_results = trader.execute_buy_orders(new_orders)
-                    new_success = [r for r in new_results if r["success"]]
-                    if new_success:
-                        new_map = {o["stock_code"]: o for o in new_success}
-                        new_fills = []
-                        for attempt in range(4):
-                            time.sleep(15)
-                            new_fills = trader.check_fills(new_success)
-                            if len(new_fills) >= len(new_success):
-                                break
-                        if new_fills:
-                            bot.send_fill_confirmation(new_fills)
-                            for nf in new_fills:
-                                mo = new_map.get(nf["stock_code"])
-                                if mo:
-                                    monitor.add_position(
-                                        stock_code=nf["stock_code"], name=nf["name"],
-                                        quantity=nf["quantity"], entry_price=nf["price"],
-                                        target1=mo["target1"], target2=mo["target2"],
-                                        stop_loss=mo["stop_loss"],
-                                        sell_strategy=mo.get("sell_strategy"),
-                                    )
-            else:
-                bot.send_message("추가 매수 대상 없음 — 기존 포지션 모니터링")
-        except Exception as e:
-            logger.error("잔여 현금 재투자 실패: %s", e)
+    _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes)
 
     logger.info("Phase 9 — 모니터링 시작")
-    return _run_monitoring_loop(monitor, bot, kis)
+    return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
 
 
-def _run_monitoring_loop(monitor: PositionMonitor, bot: TelegramBot, kis: KISClient) -> str:
+def _run_monitoring_loop(
+    monitor: PositionMonitor, bot: TelegramBot, kis: KISClient,
+    collector=None, analyzer=None, trader=None, sold_codes=None,
+) -> str:
     logger.info("모니터링 루프 시작 — 포지션 %d개", len(monitor.positions))
     bot.send_message(f"🔍 모니터링 시작 — {len(monitor.positions)}개 포지션")
+    last_reinvest = time.time()
 
     while True:
         n = now_kst()
@@ -474,6 +503,13 @@ def _run_monitoring_loop(monitor: PositionMonitor, bot: TelegramBot, kis: KISCli
             bot.process_updates(kis, monitor)
         except Exception as e:
             logger.error("텔레그램 업데이트 처리 오류: %s", e)
+
+        if (collector and analyzer and trader
+                and time.time() - last_reinvest >= config.REINVEST_CHECK_INTERVAL
+                and not _past_entry_cutoff()
+                and is_market_hours()):
+            last_reinvest = time.time()
+            _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes or set())
 
         time.sleep(config.CHECK_INTERVAL)
 
