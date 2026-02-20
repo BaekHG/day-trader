@@ -384,6 +384,59 @@ def _run_one_cycle(
     elif not fills:
         bot.send_message("⚠️ 체결 확인 불가 — /balance 명령어로 수동 확인해주세요.")
 
+    skip_codes = set(monitor.positions.keys()) | {o["stock_code"] for o in orders} | sold_codes
+    try:
+        remaining_cash = kis.get_available_cash()
+    except Exception as e:
+        logger.warning("잔여 현금 조회 실패: %s", e)
+        remaining_cash = 0
+
+    if remaining_cash >= config.MIN_REINVEST_CASH:
+        logger.info("Phase 8.7 — 잔여 현금 %s원 추가 종목 탐색", f"{remaining_cash:,}")
+        bot.send_message(f"💰 잔여 현금 {remaining_cash:,}원 — 추가 종목 분석")
+        try:
+            mdata = collector.fetch_market_data()
+            enr = collector.enrich_stocks(
+                mdata["volume_ranking"], mdata["stock_news"], mdata["is_market_open"],
+            )
+            anal = analyzer.analyze(
+                enriched_stocks=enr, up_ranking=mdata["up_ranking"],
+                down_ranking=mdata["down_ranking"], kospi_index=mdata["kospi_index"],
+                kosdaq_index=mdata["kosdaq_index"], exchange_rate=mdata["exchange_rate"],
+                is_market_open=mdata["is_market_open"],
+            )
+            new_picks = [p for p in anal.get("picks", []) if p["symbol"] not in skip_codes]
+            if new_picks:
+                new_orders = trader.calculate_orders(new_picks, remaining_cash, skip_codes)
+                if new_orders:
+                    bot.send_buy_orders(new_orders)
+                    new_results = trader.execute_buy_orders(new_orders)
+                    new_success = [r for r in new_results if r["success"]]
+                    if new_success:
+                        new_map = {o["stock_code"]: o for o in new_success}
+                        new_fills = []
+                        for attempt in range(4):
+                            time.sleep(15)
+                            new_fills = trader.check_fills(new_success)
+                            if len(new_fills) >= len(new_success):
+                                break
+                        if new_fills:
+                            bot.send_fill_confirmation(new_fills)
+                            for nf in new_fills:
+                                mo = new_map.get(nf["stock_code"])
+                                if mo:
+                                    monitor.add_position(
+                                        stock_code=nf["stock_code"], name=nf["name"],
+                                        quantity=nf["quantity"], entry_price=nf["price"],
+                                        target1=mo["target1"], target2=mo["target2"],
+                                        stop_loss=mo["stop_loss"],
+                                        sell_strategy=mo.get("sell_strategy"),
+                                    )
+            else:
+                bot.send_message("추가 매수 대상 없음 — 기존 포지션 모니터링")
+        except Exception as e:
+            logger.error("잔여 현금 재투자 실패: %s", e)
+
     logger.info("Phase 9 — 모니터링 시작")
     return _run_monitoring_loop(monitor, bot, kis)
 

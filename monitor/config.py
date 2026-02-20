@@ -46,6 +46,8 @@ MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "90"))
 DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "-5.0"))
 DAILY_PROFIT_TARGET_PCT = float(os.getenv("DAILY_PROFIT_TARGET_PCT", "5.0"))
 
+MIN_REINVEST_CASH = int(os.getenv("MIN_REINVEST_CASH", "500000"))
+
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic")  # "anthropic" or "openai"
