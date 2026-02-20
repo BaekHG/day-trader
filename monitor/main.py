@@ -102,13 +102,25 @@ def past_analysis_time() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _past_entry_cutoff() -> bool:
+    hh, mm = map(int, config.NO_NEW_ENTRY_AFTER.split(":"))
+    n = now_kst()
+    return n.hour > hh or (n.hour == hh and n.minute >= mm)
+
+
+def _get_daily_pnl_pct(monitor: PositionMonitor) -> float:
+    total_pnl = sum(t.get("pnl_amt", 0) for t in monitor.trades_today)
+    if config.TOTAL_CAPITAL <= 0:
+        return 0.0
+    return total_pnl / config.TOTAL_CAPITAL * 100
+
+
 def run_daily_cycle():
     setup_logging()
     logger.info("=" * 50)
     logger.info("Day Trader 시작 — %s", now_kst().strftime("%Y.%m.%d %H:%M"))
     logger.info("=" * 50)
 
-    # --- Init ---
     kis = KISClient()
     bot = TelegramBot()
     db = Database()
@@ -120,7 +132,6 @@ def run_daily_cycle():
     trader = Trader(kis, bot, db)
     monitor = PositionMonitor(kis, bot, db)
 
-    # --- Weekend check ---
     if is_weekend():
         bot.send_message("주말입니다. 월요일에 다시 시작합니다.")
         logger.info("주말 — 종료")
@@ -128,31 +139,86 @@ def run_daily_cycle():
 
     bot.send_message(f"🔔 Day Trader 시작 ({now_kst().strftime('%Y.%m.%d %H:%M')})")
 
-    # --- Resume: 이미 포지션이 있으면 모니터링으로 직행 ---
     if monitor.positions and past_analysis_time():
         logger.info("기존 포지션 %d개 감지 — 모니터링 재개", len(monitor.positions))
         bot.send_message(
             f"기존 포지션 {len(monitor.positions)}개 감지 — 모니터링 재개\n"
             + "\n".join(f"  {p['name']} {p['remaining_qty']}주" for p in monitor.positions.values())
         )
-        _run_monitoring_loop(monitor, bot, kis)
-        _send_daily_report(monitor, bot, db)
-        return
+        exit_reason = _run_monitoring_loop(monitor, bot, kis)
+        if exit_reason == "positions_cleared" and not _past_entry_cutoff():
+            logger.info("포지션 청산 — 추가 사이클 가능, 멀티사이클 진입")
+        else:
+            _send_daily_report(monitor, bot, db)
+            return
 
-    # --- Phase 0: Wait until analysis time ---
     if not past_analysis_time():
         wait_until(config.ANALYSIS_TIME, bot, kis, monitor)
 
-    # --- Phase 1: Fetch market data ---
+    sold_codes: set[str] = set()
+    sold_codes.update(t["code"] for t in monitor.trades_today if "code" in t)
+
+    for cycle in range(config.MAX_CYCLES):
+        logger.info("━━━ 사이클 %d/%d 시작 ━━━", cycle + 1, config.MAX_CYCLES)
+
+        if _past_entry_cutoff():
+            logger.info("신규 진입 마감 (%s) — 사이클 중단", config.NO_NEW_ENTRY_AFTER)
+            break
+
+        daily_pnl = _get_daily_pnl_pct(monitor)
+        if daily_pnl <= config.DAILY_LOSS_LIMIT_PCT:
+            logger.info("일일 손실한도 도달 (%.1f%%) — 사이클 중단", daily_pnl)
+            bot.send_message(f"🛑 일일 손실한도 도달 ({daily_pnl:.1f}%) — 매매 중단")
+            break
+        if daily_pnl >= config.DAILY_PROFIT_TARGET_PCT:
+            logger.info("일일 수익목표 달성 (%.1f%%) — 사이클 중단", daily_pnl)
+            bot.send_message(f"🎯 일일 수익목표 달성 ({daily_pnl:.1f}%) — 매매 중단")
+            break
+
+        exit_reason = _run_one_cycle(
+            cycle, kis, bot, db, collector, analyzer, trader, monitor, sold_codes,
+        )
+        sold_codes.update(t["code"] for t in monitor.trades_today if "code" in t)
+
+        if exit_reason != "positions_cleared":
+            break
+
+        if cycle < config.MAX_CYCLES - 1:
+            if _past_entry_cutoff():
+                logger.info("다음 사이클 진입 마감 — 종료")
+                break
+            logger.info("쿨다운 %d초 시작", config.CYCLE_COOLDOWN)
+            bot.send_message(f"⏸ 사이클 {cycle + 1} 완료 — {config.CYCLE_COOLDOWN // 60}분 쿨다운")
+            cooldown_end = time.time() + config.CYCLE_COOLDOWN
+            while time.time() < cooldown_end:
+                try:
+                    bot.process_updates(kis, monitor)
+                except Exception:
+                    pass
+                if monitor.should_stop:
+                    break
+                time.sleep(min(30, cooldown_end - time.time()))
+            if monitor.should_stop:
+                break
+
+    _send_daily_report(monitor, bot, db)
+
+
+def _run_one_cycle(
+    cycle: int,
+    kis: KISClient, bot: TelegramBot, db: Database,
+    collector: MarketDataCollector, analyzer: AIAnalyzer,
+    trader: Trader, monitor: PositionMonitor,
+    sold_codes: set,
+) -> str:
     logger.info("Phase 1 — 시장 데이터 수집")
     try:
         market_data = collector.fetch_market_data()
     except Exception as e:
         logger.error("시장 데이터 수집 실패: %s", e)
         bot.send_message(f"시장 데이터 수집 실패: {e}")
-        return
+        return "error"
 
-    # --- Phase 2: Enrich top stocks ---
     logger.info("Phase 2 — 종목 심층 데이터 수집")
     try:
         enriched = collector.enrich_stocks(
@@ -163,11 +229,10 @@ def run_daily_cycle():
     except Exception as e:
         logger.error("종목 데이터 enrichment 실패: %s", e)
         bot.send_message(f"종목 데이터 보강 실패: {e}")
-        return
+        return "error"
 
     logger.info("enriched %d 종목", len(enriched))
 
-    # --- Phase 3: AI analysis ---
     logger.info("Phase 3 — AI 분석 중")
     try:
         analysis = analyzer.analyze(
@@ -182,7 +247,7 @@ def run_daily_cycle():
     except Exception as e:
         logger.error("AI 분석 실패: %s", e)
         bot.send_message(f"AI 분석 실패: {e}")
-        return
+        return "error"
 
     logger.info("AI 분석 완료 — 추천: %s", analysis.get("marketAssessment", {}).get("recommendation", "?"))
     db.save_analysis(analysis)
@@ -194,42 +259,40 @@ def run_daily_cycle():
         logger.warning("현금 조회 실패, 설정값 사용: %s", e)
         available_cash = config.TOTAL_CAPITAL
 
-    # --- Phase 4: Send analysis to Telegram ---
     logger.info("Phase 4 — 텔레그램 분석 결과 전송")
     analysis["_kospi"] = market_data["kospi_index"]
     analysis["_kosdaq"] = market_data["kosdaq_index"]
     analysis["_exchange_rate"] = market_data["exchange_rate"]
     bot.send_analysis_result(analysis, available_cash)
 
-    # --- Phase 5: Check recommendation ---
     recommendation = analysis.get("marketAssessment", {}).get("recommendation", "")
     picks = analysis.get("picks", [])
 
     if recommendation == "매매비추천" or not picks:
         logger.info("매매 비추천 — 매수 없이 모니터링 모드")
-        bot.send_message("오늘은 매매 비추천입니다. 기존 포지션만 모니터링합니다.")
+        bot.send_message("매매 비추천 — 기존 포지션만 모니터링합니다.")
         if monitor.positions:
-            _run_monitoring_loop(monitor, bot, kis)
-        _send_daily_report(monitor, bot, db)
-        return
+            return _run_monitoring_loop(monitor, bot, kis)
+        return "no_picks"
 
-    # --- Phase 6: Wait for buy confirmation ---
-    logger.info("Phase 6 — 매수 확인 대기 (최대 %d초)", config.BUY_CONFIRM_TIMEOUT)
-    confirmed = bot.wait_for_buy_confirmation(config.BUY_CONFIRM_TIMEOUT)
-    if not confirmed:
-        logger.info("매수 취소/시간초과")
-        if monitor.positions:
-            _run_monitoring_loop(monitor, bot, kis)
-        _send_daily_report(monitor, bot, db)
-        return
+    if cycle == 0:
+        logger.info("Phase 6 — 매수 확인 대기 (최대 %d초)", config.BUY_CONFIRM_TIMEOUT)
+        confirmed = bot.wait_for_buy_confirmation(config.BUY_CONFIRM_TIMEOUT)
+        if not confirmed:
+            logger.info("매수 취소/시간초과")
+            if monitor.positions:
+                return _run_monitoring_loop(monitor, bot, kis)
+            return "user_cancel"
+    else:
+        bot.send_message(f"🔄 사이클 {cycle + 1} — 자동 매수 진행")
 
-    # --- Phase 7: Calculate & execute buy orders ---
     logger.info("Phase 7 — 매수 주문 실행")
-    orders = trader.calculate_orders(picks, available_cash)
+    orders = trader.calculate_orders(picks, available_cash, sold_codes)
     if not orders:
         bot.send_message("주문 가능한 종목이 없습니다.")
-        _send_daily_report(monitor, bot, db)
-        return
+        if monitor.positions:
+            return _run_monitoring_loop(monitor, bot, kis)
+        return "no_orders"
 
     bot.send_buy_orders(orders)
     results = trader.execute_buy_orders(orders)
@@ -242,13 +305,11 @@ def run_daily_cycle():
         bot.send_message(f"⚠️ 매수 실패:\n{fail_msg}")
 
     if not success_orders:
-        bot.send_message("모든 매수 주문 실패. 모니터링 모드로 전환합니다.")
+        bot.send_message("모든 매수 주문 실패.")
         if monitor.positions:
-            _run_monitoring_loop(monitor, bot, kis)
-        _send_daily_report(monitor, bot, db)
-        return
+            return _run_monitoring_loop(monitor, bot, kis)
+        return "all_failed"
 
-    # --- Phase 8: Wait for fills & add to monitor ---
     logger.info("Phase 8 — 체결 대기 (15초 간격, 최대 3분)")
     order_map = {o["stock_code"]: o for o in success_orders}
     fills = []
@@ -278,7 +339,6 @@ def run_daily_cycle():
                     sell_strategy=matching_order.get("sell_strategy"),
                 )
 
-    # --- Phase 8.5: 미체결 주문 재분석 + 재주문 ---
     try:
         pending = kis.get_pending_orders()
     except Exception as e:
@@ -324,46 +384,36 @@ def run_daily_cycle():
     elif not fills:
         bot.send_message("⚠️ 체결 확인 불가 — /balance 명령어로 수동 확인해주세요.")
 
-    # --- Phase 9: Monitoring loop ---
     logger.info("Phase 9 — 모니터링 시작")
-    _run_monitoring_loop(monitor, bot, kis)
-
-    # --- Phase 10: Daily report ---
-    _send_daily_report(monitor, bot, db)
+    return _run_monitoring_loop(monitor, bot, kis)
 
 
-def _run_monitoring_loop(monitor: PositionMonitor, bot: TelegramBot, kis: KISClient):
-    """장 마감까지 포지션 모니터링 + 텔레그램 명령 처리."""
+def _run_monitoring_loop(monitor: PositionMonitor, bot: TelegramBot, kis: KISClient) -> str:
     logger.info("모니터링 루프 시작 — 포지션 %d개", len(monitor.positions))
     bot.send_message(f"🔍 모니터링 시작 — {len(monitor.positions)}개 포지션")
 
     while True:
         n = now_kst()
 
-        # 장 마감 체크 (15:35 이후 종료)
         if n.hour >= 15 and n.minute >= 35:
             logger.info("장 마감 — 모니터링 종료")
-            break
+            return "market_close"
 
-        # /stop 명령 체크
         if monitor.should_stop:
             logger.info("사용자 /stop 명령 — 모니터링 종료")
-            break
+            return "user_stop"
 
-        # 포지션 없으면 종료
         if not monitor.positions:
             logger.info("모든 포지션 청산 — 모니터링 종료")
             bot.send_message("모든 포지션 청산 완료 — 모니터링 종료")
-            break
+            return "positions_cleared"
 
-        # 장중인 경우에만 포지션 체크
         if is_market_hours():
             try:
                 monitor.check_positions()
             except Exception as e:
                 logger.error("포지션 체크 오류: %s", e)
 
-        # 텔레그램 명령 처리
         try:
             bot.process_updates(kis, monitor)
         except Exception as e:

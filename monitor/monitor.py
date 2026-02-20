@@ -44,6 +44,7 @@ class PositionMonitor:
 
     def check_positions(self):
         now = datetime.now(KST)
+        force_hh, force_mm = map(int, config.FORCE_CLOSE_TIME.split(":"))
 
         for code, pos in list(self.positions.items()):
             try:
@@ -64,8 +65,23 @@ class PositionMonitor:
             remaining = pos["remaining_qty"]
             pnl_pct = (current - entry) / entry * 100 if entry else 0
 
-            if current <= pos["stop_loss"]:
-                self._execute_sell(code, pos, remaining, current, "손절", pnl_pct)
+            if now.hour > force_hh or (now.hour == force_hh and now.minute >= force_mm):
+                self._execute_sell(code, pos, remaining, current, f"{config.FORCE_CLOSE_TIME} 강제 청산", pnl_pct)
+                continue
+
+            effective_stop = pos["stop_loss"]
+            high_pnl = (pos["high_since_entry"] - entry) / entry * 100 if entry else 0
+            for level_pnl, stop_pnl in config.TRAILING_STOP_LEVELS:
+                if high_pnl >= level_pnl:
+                    trailing_stop = int(entry * (1 + stop_pnl / 100))
+                    effective_stop = max(effective_stop, trailing_stop)
+                    break
+            if current <= effective_stop:
+                if effective_stop > pos["stop_loss"]:
+                    reason = f"트레일링 스탑 (고점 +{high_pnl:.1f}% → 손절선 +{((effective_stop - entry) / entry * 100):.1f}%)"
+                else:
+                    reason = "손절"
+                self._execute_sell(code, pos, remaining, current, reason, pnl_pct)
                 continue
 
             if current >= pos["target1"] and not pos["target1_hit"]:
@@ -83,20 +99,15 @@ class PositionMonitor:
                 self._execute_sell(code, pos, remaining, current, "2차 목표 도달", pnl_pct)
                 continue
 
-            if pos["target1_hit"]:
-                trailing_price = int(pos["high_since_entry"] * (1 - config.TRAILING_STOP_PCT / 100))
-                if current <= trailing_price:
+            entry_time_str = pos.get("entry_time", "")
+            if entry_time_str:
+                entry_dt = datetime.fromisoformat(entry_time_str)
+                hold_minutes = (now - entry_dt).total_seconds() / 60
+                if hold_minutes >= config.MAX_HOLD_MINUTES and not pos["target1_hit"] and abs(pnl_pct) < 1.0:
                     self._execute_sell(
                         code, pos, remaining, current,
-                        f"트레일링 스탑 (고점 {pos['high_since_entry']:,}→{trailing_price:,})", pnl_pct,
+                        f"{config.MAX_HOLD_MINUTES}분 횡보 — 전량 매도", pnl_pct,
                     )
-                    continue
-
-            if now.hour >= 11 and not pos["target1_hit"]:
-                entry_date = pos.get("entry_time", "")[:10]
-                today_str = now.strftime("%Y-%m-%d")
-                if entry_date == today_str and abs(pnl_pct) < 1.0:
-                    self._execute_sell(code, pos, remaining, current, "11시 횡보 — 전량 매도", pnl_pct)
                     continue
 
             logger.info(

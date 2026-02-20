@@ -14,17 +14,23 @@ class Trader:
         self.bot = bot
         self.db = db
 
-    def calculate_orders(self, picks: list[dict], total_capital: int) -> list[dict]:
+    def calculate_orders(
+        self, picks: list[dict], total_capital: int, sold_codes: set | None = None,
+    ) -> list[dict]:
+        sold_codes = sold_codes or set()
         orders = []
         for pick in picks:
+            if pick["symbol"] in sold_codes:
+                logger.info("동일종목 재진입 차단: %s (%s)", pick["name"], pick["symbol"])
+                continue
             alloc = pick.get("allocation", 0)
             if alloc <= 0:
                 continue
             allocated = total_capital * alloc / 100
-            entry_high = pick.get("entryZone", {}).get("high", 0)
-            if entry_high <= 0:
+            entry_low = pick.get("entryZone", {}).get("low", 0)
+            if entry_low <= 0:
                 continue
-            qty = int(allocated // entry_high)
+            qty = int(allocated // entry_low)
             if qty < 1:
                 continue
             raw_reason = pick.get("reason", {})
@@ -37,8 +43,8 @@ class Trader:
                 "stock_code": pick["symbol"],
                 "name": pick["name"],
                 "quantity": qty,
-                "price": entry_high,
-                "amount": qty * entry_high,
+                "price": entry_low,
+                "amount": qty * entry_low,
                 "allocation": alloc,
                 "target1": pick.get("target1", 0),
                 "target2": pick.get("target2", 0),
