@@ -354,16 +354,7 @@ def _run_one_cycle(
             return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "no_picks"
 
-    if cycle == 0:
-        logger.info("Phase 6 — 매수 확인 대기 (최대 %d초)", config.BUY_CONFIRM_TIMEOUT)
-        confirmed = bot.wait_for_buy_confirmation(config.BUY_CONFIRM_TIMEOUT)
-        if not confirmed:
-            logger.info("매수 취소/시간초과")
-            if monitor.positions:
-                return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
-            return "user_cancel"
-    else:
-        bot.send_message(f"🔄 사이클 {cycle + 1} — 자동 매수 진행")
+    bot.send_message(f"🔄 사이클 {cycle + 1} — 자동 매수 진행")
 
     logger.info("Phase 7 — 매수 주문 실행")
     orders = trader.calculate_orders(picks, available_cash, sold_codes)
