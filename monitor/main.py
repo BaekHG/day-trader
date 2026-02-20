@@ -178,6 +178,20 @@ def _try_reinvest(
                         sell_strategy=mo.get("sell_strategy"),
                     )
                     sold_codes.add(nf["stock_code"])
+
+        filled_codes = {nf["stock_code"] for nf in new_fills}
+        unfilled = [o for o in new_success if o["stock_code"] not in filled_codes]
+        if unfilled:
+            try:
+                pending = kis.get_pending_orders()
+                unfilled_codes = {o["stock_code"] for o in unfilled}
+                to_cancel = [p for p in pending if p["stock_code"] in unfilled_codes]
+                if to_cancel:
+                    trader.cancel_unfilled_orders(to_cancel)
+                    names = ", ".join(p["name"] for p in to_cancel)
+                    bot.send_message(f"⏳ 미체결 자동 취소: {names}")
+            except Exception as e:
+                logger.error("미체결 취소 실패: %s", e)
     except Exception as e:
         logger.error("잔여 현금 재투자 실패: %s", e)
 
