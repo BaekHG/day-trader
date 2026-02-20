@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 
 import requests
@@ -11,11 +12,19 @@ MEDAL = {1: "🥇", 2: "🥈", 3: "🥉"}
 
 
 class TelegramBot:
+    _active_poller = None
+
     def __init__(self):
         self.token = config.TELEGRAM_BOT_TOKEN
         self.chat_id = config.TELEGRAM_CHAT_ID
         self.base_url = f"https://api.telegram.org/bot{self.token}"
         self._last_update_id = 0
+        self._update_lock = threading.Lock()
+        self._poll_thread = None
+        self._poll_active = False
+        self._poll_paused = False
+        self._poll_kis = None
+        self._poll_monitor = None
 
     def send_message(self, text: str) -> bool:
         if not self.token or not self.chat_id:
@@ -32,6 +41,36 @@ class TelegramBot:
         except Exception as e:
             logger.error("텔레그램 전송 실패: %s", e)
             return False
+
+    def start_polling(self, kis_client, monitor):
+        """백그라운드 텔레그램 명령어 폴링 시작."""
+        if TelegramBot._active_poller:
+            TelegramBot._active_poller.stop_polling()
+            time.sleep(1)
+        self._poll_kis = kis_client
+        self._poll_monitor = monitor
+        self._poll_active = True
+        self._poll_thread = threading.Thread(
+            target=self._bg_poll, daemon=True, name="tg-cmd",
+        )
+        self._poll_thread.start()
+        TelegramBot._active_poller = self
+        logger.info("텔레그램 명령어 폴링 시작")
+
+    def stop_polling(self):
+        """백그라운드 폴링 중지."""
+        self._poll_active = False
+        if TelegramBot._active_poller is self:
+            TelegramBot._active_poller = None
+
+    def _bg_poll(self):
+        while self._poll_active:
+            if not self._poll_paused and self._poll_kis and self._poll_monitor:
+                try:
+                    self.process_updates(self._poll_kis, self._poll_monitor)
+                except Exception as e:
+                    logger.error("텔레그램 폴링 오류: %s", e)
+            time.sleep(5)
 
     def send_analysis_result(self, analysis: dict, total_capital: int):
         ma = analysis.get("marketAssessment", {})
@@ -136,9 +175,36 @@ class TelegramBot:
         self.send_message(summary)
 
     def wait_for_buy_confirmation(self, timeout: int) -> bool:
-        deadline = time.time() + timeout
-        self._flush_updates()
-        while time.time() < deadline:
+        self._poll_paused = True
+        self._update_lock.acquire()
+        try:
+            self._flush_updates()
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                updates = self._get_updates()
+                for u in updates:
+                    msg = u.get("message", {})
+                    txt = msg.get("text", "").strip()
+                    cid = str(msg.get("chat", {}).get("id", ""))
+                    if cid != str(self.chat_id):
+                        continue
+                    if txt in ("ㅇㅇ", "ㅇ", "go", "ㄱㄱ"):
+                        self.send_message("👍 매수 진행합니다!")
+                        return True
+                    if txt in ("ㄴㄴ", "ㄴ", "no"):
+                        self.send_message("매수 취소.")
+                        return False
+                time.sleep(2)
+            self.send_message("⏰ 시간 초과 — 오늘 매매 건너뜁니다.")
+            return False
+        finally:
+            self._update_lock.release()
+            self._poll_paused = False
+
+    def process_updates(self, kis_client, monitor):
+        if not self._update_lock.acquire(blocking=False):
+            return
+        try:
             updates = self._get_updates()
             for u in updates:
                 msg = u.get("message", {})
@@ -146,33 +212,17 @@ class TelegramBot:
                 cid = str(msg.get("chat", {}).get("id", ""))
                 if cid != str(self.chat_id):
                     continue
-                if txt in ("ㅇㅇ", "ㅇ", "go", "ㄱㄱ"):
-                    self.send_message("👍 매수 진행합니다!")
-                    return True
-                if txt in ("ㄴㄴ", "ㄴ", "no"):
-                    self.send_message("매수 취소.")
-                    return False
-            time.sleep(2)
-        self.send_message("⏰ 시간 초과 — 오늘 매매 건너뜁니다.")
-        return False
-
-    def process_updates(self, kis_client, monitor):
-        updates = self._get_updates()
-        for u in updates:
-            msg = u.get("message", {})
-            txt = msg.get("text", "").strip()
-            cid = str(msg.get("chat", {}).get("id", ""))
-            if cid != str(self.chat_id):
-                continue
-            if txt == "/status":
-                self._send_status(monitor, kis_client)
-            elif txt == "/balance":
-                self._send_balance(kis_client)
-            elif txt == "/pnl":
-                self.send_message(monitor.get_daily_summary())
-            elif txt == "/stop":
-                self.send_message("모니터링 종료합니다.")
-                monitor.should_stop = True
+                if txt == "/status":
+                    self._send_status(monitor, kis_client)
+                elif txt == "/balance":
+                    self._send_balance(kis_client)
+                elif txt == "/pnl":
+                    self.send_message(monitor.get_daily_summary())
+                elif txt == "/stop":
+                    self.send_message("모니터링 종료합니다.")
+                    monitor.should_stop = True
+        finally:
+            self._update_lock.release()
 
     def _send_status(self, monitor, kis_client):
         if not monitor.positions:

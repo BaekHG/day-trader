@@ -132,10 +132,12 @@ def run_daily_cycle():
     trader = Trader(kis, bot, db)
     monitor = PositionMonitor(kis, bot, db)
 
+    bot.start_polling(kis, monitor)
+
     if is_weekend():
         bot.send_message("주말입니다. 월요일에 다시 시작합니다.")
         logger.info("주말 — 종료")
-        return
+        return bot
 
     bot.send_message(f"🔔 Day Trader 시작 ({now_kst().strftime('%Y.%m.%d %H:%M')})")
 
@@ -150,7 +152,7 @@ def run_daily_cycle():
             logger.info("포지션 청산 — 추가 사이클 가능, 멀티사이클 진입")
         else:
             _send_daily_report(monitor, bot, db)
-            return
+            return bot
 
     if not past_analysis_time():
         wait_until(config.ANALYSIS_TIME, bot, kis, monitor)
@@ -202,6 +204,7 @@ def run_daily_cycle():
                 break
 
     _send_daily_report(monitor, bot, db)
+    return bot
 
 
 def _run_one_cycle(
@@ -506,16 +509,18 @@ def _sleep_until_midnight():
 
 if __name__ == "__main__":
     while True:
+        _bot = None
         try:
-            run_daily_cycle()
+            _bot = run_daily_cycle()
         except KeyboardInterrupt:
             logger.info("사용자 중단 (Ctrl+C)")
             break
         except Exception as e:
             logger.exception("예상치 못한 오류: %s", e)
             try:
-                bot = TelegramBot()
-                bot.send_message(f"❌ Day Trader 오류 발생: {e}")
+                TelegramBot().send_message(f"❌ Day Trader 오류 발생: {e}")
             except Exception:
                 pass
         _sleep_until_midnight()
+        if _bot:
+            _bot.stop_polling()
