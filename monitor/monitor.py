@@ -22,6 +22,7 @@ class PositionMonitor:
         self.trades_today: list[dict] = []
         self.should_stop = False
         self._load_positions()
+        self._load_trades_today()
 
     def add_position(
         self, stock_code: str, name: str, quantity: int, entry_price: int,
@@ -146,6 +147,7 @@ class PositionMonitor:
                 "entry": entry, "exit": price,
                 "pnl_amt": pnl_amt, "pnl_pct": round(pnl_pct, 1), "reason": reason,
             })
+            self._save_trades_today()
 
             if self.db:
                 self.db.save_trade(
@@ -208,6 +210,29 @@ class PositionMonitor:
                 json.dump(self.positions, f, ensure_ascii=False, indent=2)
         except Exception as e:
             logger.error("포지션 저장 실패: %s", e)
+
+    def _save_trades_today(self):
+        try:
+            data = {
+                "date": datetime.now(KST).strftime("%Y-%m-%d"),
+                "trades": self.trades_today,
+            }
+            with open(config.TRADES_FILE, "w") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error("거래 내역 저장 실패: %s", e)
+
+    def _load_trades_today(self):
+        try:
+            with open(config.TRADES_FILE, "r") as f:
+                data = json.load(f)
+            if data.get("date") == datetime.now(KST).strftime("%Y-%m-%d"):
+                self.trades_today = data.get("trades", [])
+                logger.info("오늘 거래 내역 로드: %d건", len(self.trades_today))
+            else:
+                self.trades_today = []
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.trades_today = []
 
     def sync_with_balance(self) -> dict:
         try:
