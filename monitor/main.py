@@ -476,7 +476,7 @@ def _run_monitoring_loop(
 ) -> str:
     logger.info("모니터링 루프 시작 — 포지션 %d개", len(monitor.positions))
     bot.send_message(f"🔍 모니터링 시작 — {len(monitor.positions)}개 포지션")
-    last_reinvest = time.time()
+    last_reinvest = 0
 
     while True:
         n = now_kst()
@@ -495,10 +495,16 @@ def _run_monitoring_loop(
             return "positions_cleared"
 
         if is_market_hours():
+            trades_before = len(monitor.trades_today)
             try:
                 monitor.check_positions()
             except Exception as e:
                 logger.error("포지션 체크 오류: %s", e)
+            if len(monitor.trades_today) > trades_before:
+                for t in monitor.trades_today[trades_before:]:
+                    if t.get("code") and t["code"] not in monitor.positions and sold_codes is not None:
+                        sold_codes.add(t["code"])
+                last_reinvest = 0
 
         try:
             bot.process_updates(kis, monitor)
