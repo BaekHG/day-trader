@@ -138,9 +138,13 @@ def _try_reinvest(
             kosdaq_index=mdata["kosdaq_index"], exchange_rate=mdata["exchange_rate"],
             is_market_open=mdata["is_market_open"],
         )
+        anal["_kospi"] = mdata["kospi_index"]
+        anal["_kosdaq"] = mdata["kosdaq_index"]
+        anal["_exchange_rate"] = mdata["exchange_rate"]
+        bot.send_analysis_result(anal, remaining_cash)
+
         rec = anal.get("marketAssessment", {}).get("recommendation", "")
         if rec == "매매비추천":
-            bot.send_message("재투자 분석: 매매비추천 — 패스")
             return
 
         new_picks = [p for p in anal.get("picks", []) if p["symbol"] not in skip_codes]
