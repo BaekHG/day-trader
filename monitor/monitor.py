@@ -209,6 +209,47 @@ class PositionMonitor:
         except Exception as e:
             logger.error("포지션 저장 실패: %s", e)
 
+    def sync_with_balance(self) -> dict:
+        try:
+            holdings = self.kis.get_balance()
+        except Exception as e:
+            logger.error("잔고 조회 실패 — 동기화 스킵: %s", e)
+            return {"added": [], "removed": []}
+
+        kis_codes = {h["stock_code"]: h for h in holdings}
+        pos_codes = set(self.positions.keys())
+
+        added: list[dict] = []
+        removed: list[str] = []
+
+        for code, h in kis_codes.items():
+            if code not in pos_codes:
+                entry = h["avg_price"]
+                if entry <= 0:
+                    continue
+                target1 = int(entry * 1.05)
+                target2 = int(entry * 1.10)
+                stop_loss = int(entry * 0.97)
+                self.add_position(
+                    stock_code=code, name=h["name"],
+                    quantity=h["quantity"], entry_price=entry,
+                    target1=target1, target2=target2, stop_loss=stop_loss,
+                )
+                added.append(h)
+                logger.info("동기화 추가: %s %d주 @ %s원", h["name"], h["quantity"], f"{entry:,}")
+
+        for code in list(pos_codes):
+            if code not in kis_codes:
+                name = self.positions[code].get("name", code)
+                removed.append(name)
+                self.remove_position(code)
+                logger.info("동기화 제거: %s (실잔고에 없음)", name)
+
+        if added or removed:
+            self._save_positions()
+
+        return {"added": added, "removed": removed}
+
     def _load_positions(self):
         try:
             with open(config.POSITIONS_FILE, "r") as f:

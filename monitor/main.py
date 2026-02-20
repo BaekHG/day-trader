@@ -206,6 +206,16 @@ def run_daily_cycle():
     trader = Trader(kis, bot, db)
     monitor = PositionMonitor(kis, bot, db)
 
+    logger.info("KIS 잔고 ↔ positions.json 동기화")
+    sync_result = monitor.sync_with_balance()
+    if sync_result["added"] or sync_result["removed"]:
+        lines = ["🔄 <b>포지션 동기화 완료</b>"]
+        for h in sync_result["added"]:
+            lines.append(f"  ➕ {h['name']} {h['quantity']}주 @ {h['avg_price']:,}원")
+        for name in sync_result["removed"]:
+            lines.append(f"  ➖ {name} (청산됨)")
+        bot.send_message("\n".join(lines))
+
     bot.start_polling(kis, monitor)
 
     if is_weekend():
