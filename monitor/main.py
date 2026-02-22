@@ -408,8 +408,14 @@ def _run_one_cycle(
             return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "all_failed"
 
-    logger.info("Phase 8 — 체결 대기 (15초 간격, 최대 3분)")
     order_map = {o["stock_code"]: o for o in success_orders}
+
+    if not collector.is_market_open():
+        logger.info("장 시작 전 — 09:02까지 대기 후 체결 확인")
+        bot.send_message("⏳ 장 시작 전 — 09:02에 체결 확인합니다.")
+        wait_until("09:02", bot, kis, monitor)
+
+    logger.info("Phase 8 — 체결 대기 (15초 간격, 최대 3분)")
     fills = []
     for attempt in range(12):
         time.sleep(15)
