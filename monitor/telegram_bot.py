@@ -251,7 +251,7 @@ class TelegramBot:
                 elif txt == "/cash":
                     try:
                         cash = kis_client.get_available_cash()
-                        self.send_message(f"💰 예수금: {cash:,}원")
+                        self.send_message(f"💰 매수가능금액: {cash:,}원")
                     except Exception as e:
                         self.send_message(f"예수금 조회 실패: {e}")
                 elif txt.startswith("/sell "):

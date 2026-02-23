@@ -159,7 +159,14 @@ class KISClient:
             "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y",
         }
         resp = self._get(url, headers=self._headers("TTTC8908R"), params=params)
-        return int(resp.json().get("output", {}).get("ord_psbl_cash", 0))
+        output = resp.json().get("output", {})
+        # 미수없는매수금액 (실제 매수 가능 금액) 우선, fallback으로 주문가능현금
+        nrcvb = int(output.get("nrcvb_buy_amt", 0) or 0)
+        cash = int(output.get("ord_psbl_cash", 0) or 0)
+        result = nrcvb if nrcvb > 0 else cash
+        logger.info("예수금 조회 — 미수없는매수금액: %s원, 주문가능현금: %s원 → %s원",
+                     f"{nrcvb:,}", f"{cash:,}", f"{result:,}")
+        return result
 
     def cancel_order(
         self, krx_fwdg_ord_orgno: str, orgn_odno: str, quantity: int,
