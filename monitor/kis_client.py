@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta
 
@@ -20,6 +21,40 @@ class KISClient:
         self._access_token = None
         self._token_expires_at = 0
 
+    def _request_with_retry(self, method, url, max_retries=3, **kwargs):
+        """HTTP request with exponential backoff on 429/503/ConnectionError."""
+        kwargs.setdefault("timeout", 10)
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                resp = requests.request(method, url, **kwargs)
+                resp.raise_for_status()
+                return resp
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if status in (429, 503) and attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning("API 재시도 %d/%d (HTTP %d): %s", attempt + 1, max_retries, status, url.split("/")[-1])
+                    time.sleep(wait)
+                    last_error = e
+                else:
+                    raise
+            except requests.exceptions.ConnectionError as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning("연결 오류 재시도 %d/%d: %s", attempt + 1, max_retries, e)
+                    time.sleep(wait)
+                    last_error = e
+                else:
+                    raise
+        raise last_error
+
+    def _get(self, url, **kwargs):
+        return self._request_with_retry("GET", url, **kwargs)
+
+    def _post(self, url, **kwargs):
+        return self._request_with_retry("POST", url, **kwargs)
+
     def _load_cached_token(self):
         try:
             with open(config.TOKEN_CACHE_FILE, "r") as f:
@@ -29,7 +64,10 @@ class KISClient:
                 self._token_expires_at = cache["expires_at"]
                 return True
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            pass
+            try:
+                os.remove(config.TOKEN_CACHE_FILE)
+            except (FileNotFoundError, OSError):
+                pass
         return False
 
     def _save_token_cache(self):
@@ -45,11 +83,10 @@ class KISClient:
             return self._access_token
         url = f"{self.base_url}/oauth2/tokenP"
         body = {"grant_type": "client_credentials", "appkey": self.app_key, "appsecret": self.app_secret}
-        resp = requests.post(url, json=body, timeout=10)
-        resp.raise_for_status()
+        resp = self._post(url, json=body)
         data = resp.json()
         self._access_token = data["access_token"]
-        self._token_expires_at = time.time() + 23 * 3600
+        self._token_expires_at = time.time() + 22 * 3600
         self._save_token_cache()
         logger.info("새 토큰 발급 완료")
         return self._access_token
@@ -64,8 +101,7 @@ class KISClient:
     def get_current_price(self, stock_code: str) -> dict:
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-price"
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": stock_code}
-        resp = requests.get(url, headers=self._headers("FHKST01010100"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("FHKST01010100"), params=params)
         o = resp.json().get("output", {})
         return {
             "price": int(o.get("stck_prpr", 0)),
@@ -81,8 +117,7 @@ class KISClient:
             "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
             "PDNO": stock_code, "ORD_DVSN": "01", "ORD_QTY": str(quantity), "ORD_UNPR": "0",
         }
-        resp = requests.post(url, headers=self._headers("TTTC0011U"), json=body, timeout=10)
-        resp.raise_for_status()
+        resp = self._post(url, headers=self._headers("TTTC0011U"), json=body)
         return resp.json()
 
     def place_buy_order(self, stock_code: str, quantity: int, price: int) -> dict:
@@ -91,8 +126,7 @@ class KISClient:
             "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
             "PDNO": stock_code, "ORD_DVSN": "00", "ORD_QTY": str(quantity), "ORD_UNPR": str(price),
         }
-        resp = requests.post(url, headers=self._headers("TTTC0802U"), json=body, timeout=10)
-        resp.raise_for_status()
+        resp = self._post(url, headers=self._headers("TTTC0802U"), json=body)
         return resp.json()
 
     def get_balance(self) -> list[dict]:
@@ -103,8 +137,7 @@ class KISClient:
             "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "01",
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
         }
-        resp = requests.get(url, headers=self._headers("TTTC8434R"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("TTTC8434R"), params=params)
         holdings = []
         for item in resp.json().get("output1", []):
             if int(item.get("hldg_qty", 0)) > 0:
@@ -125,8 +158,7 @@ class KISClient:
             "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01",
             "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y",
         }
-        resp = requests.get(url, headers=self._headers("TTTC8908R"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("TTTC8908R"), params=params)
         return int(resp.json().get("output", {}).get("ord_psbl_cash", 0))
 
     def cancel_order(
@@ -145,8 +177,7 @@ class KISClient:
             "ORD_UNPR": "0",
             "QTY_ALL_ORD_YN": "Y",
         }
-        resp = requests.post(url, headers=self._headers("TTTC0803U"), json=body, timeout=10)
-        resp.raise_for_status()
+        resp = self._post(url, headers=self._headers("TTTC0803U"), json=body)
         return resp.json()
 
     def get_pending_orders(self) -> list[dict]:
@@ -161,8 +192,7 @@ class KISClient:
             "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00",
             "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
         }
-        resp = requests.get(url, headers=self._headers("TTTC8001R"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("TTTC8001R"), params=params)
         pending = []
         for item in resp.json().get("output1", []):
             rmn_qty = int(item.get("rmn_qty", 0))
@@ -189,8 +219,7 @@ class KISClient:
             "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
         }
-        resp = requests.get(url, headers=self._headers("TTTC8001R"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("TTTC8001R"), params=params)
         fills = []
         for item in resp.json().get("output1", []):
             qty = int(item.get("tot_ccld_qty", 0))
@@ -211,8 +240,7 @@ class KISClient:
             "FID_INPUT_PRICE_1": "0", "FID_INPUT_PRICE_2": "0",
             "FID_VOL_CNT": "0", "FID_INPUT_DATE_1": "",
         }
-        resp = requests.get(url, headers=self._headers("FHPST01710000"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("FHPST01710000"), params=params)
         return resp.json().get("output", []) or []
 
     def get_fluctuation_ranking(self, is_up: bool = True) -> list[dict]:
@@ -225,8 +253,7 @@ class KISClient:
             "FID_INPUT_PRICE_1": "0", "FID_INPUT_PRICE_2": "0",
             "FID_VOL_CNT": "0", "FID_INPUT_DATE_1": "",
         }
-        resp = requests.get(url, headers=self._headers("FHPST01700000"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("FHPST01700000"), params=params)
         return resp.json().get("output", []) or []
 
     def get_daily_candles(self, stock_code: str) -> list[dict]:
@@ -238,8 +265,7 @@ class KISClient:
             "FID_INPUT_DATE_2": now.strftime("%Y%m%d"),
             "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0",
         }
-        resp = requests.get(url, headers=self._headers("FHKST03010100"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("FHKST03010100"), params=params)
         return resp.json().get("output2", []) or []
 
     def get_minute_candles(self, stock_code: str) -> list[dict]:
@@ -249,15 +275,13 @@ class KISClient:
             "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": stock_code,
             "FID_INPUT_HOUR_1": now.strftime("%H%M%S"), "FID_PW_DATA_INCU_YN": "Y",
         }
-        resp = requests.get(url, headers=self._headers("FHKST03010200"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("FHKST03010200"), params=params)
         return (resp.json().get("output2", []) or [])[:12]
 
     def get_foreign_institution(self, stock_code: str) -> list[dict]:
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/foreign-institution-total"
         params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": stock_code}
-        resp = requests.get(url, headers=self._headers("FHPTJ04400000"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("FHPTJ04400000"), params=params)
         return resp.json().get("output", []) or []
 
     def get_kospi_index(self) -> dict:
@@ -269,8 +293,7 @@ class KISClient:
     def _get_index(self, iscd: str) -> dict:
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-index-price"
         params = {"FID_COND_MRKT_DIV_CODE": "U", "FID_INPUT_ISCD": iscd}
-        resp = requests.get(url, headers=self._headers("FHPUP02100000"), params=params, timeout=10)
-        resp.raise_for_status()
+        resp = self._get(url, headers=self._headers("FHPUP02100000"), params=params)
         o = resp.json().get("output", {})
         if not o:
             return {}
@@ -283,11 +306,10 @@ class KISClient:
 
     def get_exchange_rate(self) -> dict:
         try:
-            resp = requests.get(
+            resp = self._get(
                 "https://m.stock.naver.com/front-api/marketIndex/productDetail",
                 params={"category": "exchange", "reutersCode": "FX_USDKRW"}, timeout=5,
             )
-            resp.raise_for_status()
             r = resp.json().get("result", {})
             return {"exchange_rate": r.get("closePrice", ""), "change_rate": r.get("compareToPreviousClosePrice", "")}
         except Exception:

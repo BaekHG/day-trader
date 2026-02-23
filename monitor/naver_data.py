@@ -1,5 +1,6 @@
 import logging
 import re
+from html import unescape
 
 import requests
 
@@ -29,8 +30,8 @@ def _to_kis_format(naver: dict) -> dict:
         "prdy_ctrt": str(naver.get("fluctuationsRatio", "0")),
         "acml_vol": _remove_comma(naver.get("accumulatedTradingVolume")),
         "acml_tr_pbmn": _remove_comma(naver.get("accumulatedTradingValue")),
-        "stck_hgpr": price,
-        "stck_sdpr": price,
+    "stck_hgpr": "0",
+    "stck_sdpr": "0",
     }
 
 
@@ -157,7 +158,7 @@ class NaverNewsService:
         for it in items:
             if not isinstance(it, dict):
                 continue
-            title = re.sub(r"<[^>]*>", "", it.get("title", "") or it.get("titleFull", ""))
+            title = unescape(re.sub(r"<[^>]*>", "", it.get("title", "") or it.get("titleFull", "")))
             if not title:
                 continue
             office_id = it.get("officeId", "")

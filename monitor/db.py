@@ -5,6 +5,7 @@ Supabase DB 모듈 — 매매 이력, AI 분석, 일일 리포트 저장
 import json
 import logging
 import os
+import time
 from datetime import datetime
 
 import pytz
@@ -35,20 +36,25 @@ class Database:
     def _post(self, table: str, data: dict) -> bool:
         if not self.enabled:
             return False
-        try:
-            resp = requests.post(
-                f"{self.url}/rest/v1/{table}",
-                headers=self.headers,
-                json=data,
-                timeout=10,
-            )
-            if resp.status_code in (200, 201):
-                return True
-            logger.error("DB insert 실패 [%s]: %s %s", table, resp.status_code, resp.text[:200])
-            return False
-        except Exception as e:
-            logger.error("DB 연결 실패 [%s]: %s", table, e)
-            return False
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    f"{self.url}/rest/v1/{table}",
+                    headers=self.headers,
+                    json=data,
+                    timeout=15,
+                )
+                if resp.status_code in (200, 201):
+                    return True
+                logger.error("DB insert 실패 [%s] (시도 %d/3): %s %s",
+                            table, attempt + 1, resp.status_code, resp.text[:200])
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+            except Exception as e:
+                logger.error("DB 연결 실패 [%s] (시도 %d/3): %s", table, attempt + 1, e)
+                if attempt < 2:
+                    time.sleep(2 ** attempt)
+        return False
 
     def _delete(self, table: str, column: str, value: str) -> bool:
         if not self.enabled:
@@ -81,8 +87,9 @@ class Database:
         reason: str = "",
         pnl_amount: int = 0,
         pnl_pct: float = 0.0,
+        odno: str = "",
     ) -> bool:
-        return self._post("trades", {
+        data = {
             "stock_code": stock_code,
             "stock_name": stock_name,
             "action": action,
@@ -93,7 +100,10 @@ class Database:
             "pnl_amount": pnl_amount,
             "pnl_pct": round(pnl_pct, 2),
             "traded_at": datetime.now(KST).isoformat(),
-        })
+        }
+        if odno:
+            data["odno"] = odno
+        return self._post("trades", data)
 
     # ──────────────────────────────────────
     # AI 분석 결과

@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import time
 from datetime import datetime
 
 import pytz
@@ -114,10 +115,12 @@ class AIAnalyzer:
         kosdaq_index: dict,
         exchange_rate: dict,
         is_market_open: bool,
+        current_positions=None,
     ) -> dict:
         user_prompt = self._build_user_prompt(
             enriched_stocks, up_ranking, down_ranking,
             kospi_index, kosdaq_index, exchange_rate, is_market_open,
+            current_positions=current_positions,
         )
 
         if self.provider == "anthropic":
@@ -151,58 +154,84 @@ class AIAnalyzer:
         raise ValueError(f"Claude 응답에서 유효한 JSON을 추출할 수 없습니다: {text[:200]}...")
 
     def _call_anthropic(self, user_prompt: str) -> dict:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 6000,
-                "system": SYSTEM_PROMPT,
-                "messages": [
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": 0,
-            },
-            timeout=90,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["content"][0]["text"]
-        parsed = self._extract_json(content)
-        usage = data.get("usage", {})
-        logger.info("Claude 분석 완료 — 토큰: input=%s output=%s",
-                     usage.get("input_tokens", "?"), usage.get("output_tokens", "?"))
-        return parsed
+        last_error = Exception("재시도 모두 실패")
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-api-key": self.api_key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 6000,
+                        "system": SYSTEM_PROMPT,
+                        "messages": [
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "temperature": 0,
+                    },
+                    timeout=90,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["content"][0]["text"]
+                parsed = self._extract_json(content)
+                usage = data.get("usage", {})
+                logger.info("Claude 분석 완료 — 토큰: input=%s output=%s",
+                            usage.get("input_tokens", "?"), usage.get("output_tokens", "?"))
+                return parsed
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if status in (429, 503, 529) and attempt < 2:
+                    wait = 2 ** attempt * 5
+                    logger.warning("Claude API 재시도 %d/3 (HTTP %d)", attempt + 1, status)
+                    time.sleep(wait)
+                    last_error = e
+                else:
+                    raise
+        raise last_error  # type: ignore[misc]
 
     def _call_openai(self, user_prompt: str) -> dict:
-        resp = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            json={
-                "model": "gpt-4o",
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "response_format": {"type": "json_object"},
-                "temperature": 0.2,
-                "max_tokens": 6000,
-            },
-            timeout=60,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
-        logger.info("OpenAI 분석 완료 — 토큰 사용: %s", data.get("usage", {}))
-        return parsed
+        last_error = Exception("재시도 모두 실패")
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                    json={
+                        "model": "gpt-4o",
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_prompt},
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.2,
+                        "max_tokens": 6000,
+                    },
+                    timeout=60,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                parsed = json.loads(content)
+                logger.info("OpenAI 분석 완료 — 토큰 사용: %s", data.get("usage", {}))
+                return parsed
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if status in (429, 503, 529) and attempt < 2:
+                    wait = 2 ** attempt * 5
+                    logger.warning("OpenAI API 재시도 %d/3 (HTTP %d)", attempt + 1, status)
+                    time.sleep(wait)
+                    last_error = e
+                else:
+                    raise
+        raise last_error  # type: ignore[misc]
 
     def reanalyze_entry(
         self,
@@ -233,47 +262,73 @@ class AIAnalyzer:
         return self._call_openai_light(prompt)
 
     def _call_anthropic_light(self, prompt: str) -> dict:
-        resp = requests.post(
-            "https://api.anthropic.com/v1/messages",
-            headers={
-                "Content-Type": "application/json",
-                "x-api-key": self.api_key,
-                "anthropic-version": "2023-06-01",
-            },
-            json={
-                "model": "claude-sonnet-4-20250514",
-                "max_tokens": 500,
-                "system": "너는 한국 주식 단타 전문가다. 미체결 주문의 현재가 재진입 여부를 판단한다. 순수 JSON만 출력하라.",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        content = resp.json()["content"][0]["text"]
-        return self._extract_json(content)
+        last_error = Exception("재시도 모두 실패")
+        for attempt in range(2):
+            try:
+                resp = requests.post(
+                    "https://api.anthropic.com/v1/messages",
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-api-key": self.api_key,
+                        "anthropic-version": "2023-06-01",
+                    },
+                    json={
+                        "model": "claude-sonnet-4-20250514",
+                        "max_tokens": 500,
+                        "system": "너는 한국 주식 단타 전문가다. 미체결 주문의 현재가 재진입 여부를 판단한다. 순수 JSON만 출력하라.",
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0,
+                    },
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                content = resp.json()["content"][0]["text"]
+                return self._extract_json(content)
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if status in (429, 503, 529) and attempt < 1:
+                    wait = 5
+                    logger.warning("Claude light API 재시도 %d/2 (HTTP %d)", attempt + 1, status)
+                    time.sleep(wait)
+                    last_error = e
+                else:
+                    raise
+        raise last_error  # type: ignore[misc]
 
     def _call_openai_light(self, prompt: str) -> dict:
-        resp = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.api_key}",
-            },
-            json={
-                "model": "gpt-4o",
-                "messages": [
-                    {"role": "system", "content": "너는 한국 주식 단타 전문가다. 미체결 주문의 현재가 재진입 여부를 판단한다."},
-                    {"role": "user", "content": prompt},
-                ],
-                "response_format": {"type": "json_object"},
-                "temperature": 0,
-                "max_tokens": 500,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return json.loads(resp.json()["choices"][0]["message"]["content"])
+        last_error = Exception("재시도 모두 실패")
+        for attempt in range(2):
+            try:
+                resp = requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.api_key}",
+                    },
+                    json={
+                        "model": "gpt-4o",
+                        "messages": [
+                            {"role": "system", "content": "너는 한국 주식 단타 전문가다. 미체결 주문의 현재가 재진입 여부를 판단한다."},
+                            {"role": "user", "content": prompt},
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0,
+                        "max_tokens": 500,
+                    },
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                return json.loads(resp.json()["choices"][0]["message"]["content"])
+            except requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if status in (429, 503, 529) and attempt < 1:
+                    wait = 5
+                    logger.warning("OpenAI light API 재시도 %d/2 (HTTP %d)", attempt + 1, status)
+                    time.sleep(wait)
+                    last_error = e
+                else:
+                    raise
+        raise last_error  # type: ignore[misc]
 
     def _build_user_prompt(
         self,
@@ -284,6 +339,7 @@ class AIAnalyzer:
         kosdaq_index: dict,
         exchange_rate: dict,
         is_market_open: bool,
+        current_positions=None,
     ) -> str:
         now = datetime.now(KST)
         time_str = now.strftime("%Y.%m.%d %H:%M")
@@ -403,6 +459,13 @@ class AIAnalyzer:
                 f"거래량{item.get('acml_vol', '')} 거래대금{item.get('acml_tr_pbmn', '')}"
             )
         lines.append("")
+
+        if current_positions:
+            lines.append("【현재 보유 포지션 — 중복 추천 금지】")
+            for pos in current_positions:
+                lines.append(f"  - {pos.get('name', '?')} ({pos.get('code', '?')}) {pos.get('remaining_qty', '?')}주")
+            lines.append("위 보유 종목은 반드시 추천에서 제외하세요.")
+            lines.append("")
 
         if is_market_open:
             lines.append(

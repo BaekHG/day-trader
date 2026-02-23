@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../screens/chart/chart_screen.dart';
 import '../../screens/daily_pick/daily_pick_screen.dart';
 import '../../screens/home/home_screen.dart';
-import '../../screens/journal/journal_screen.dart';
+import '../../screens/bot_report/bot_report_screen.dart';
 import '../../screens/trade/add_trade_screen.dart';
 import '../../screens/trade/close_trade_screen.dart';
 import '../../screens/trade/trade_screen.dart';
@@ -74,8 +74,8 @@ final routerProvider = Provider<GoRouter>((ref) {
           StatefulShellBranch(
             routes: [
               GoRoute(
-                path: '/journal',
-                builder: (context, state) => const JournalScreen(),
+                path: '/bot-report',
+                builder: (context, state) => const BotReportScreen(),
               ),
             ],
           ),

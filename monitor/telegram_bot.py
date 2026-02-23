@@ -64,12 +64,19 @@ class TelegramBot:
             TelegramBot._active_poller = None
 
     def _bg_poll(self):
+        consecutive_failures = 0
         while self._poll_active:
             if not self._poll_paused and self._poll_kis and self._poll_monitor:
                 try:
                     self.process_updates(self._poll_kis, self._poll_monitor)
+                    consecutive_failures = 0
                 except Exception as e:
-                    logger.error("텔레그램 폴링 오류: %s", e)
+                    consecutive_failures += 1
+                    logger.error("텔레그램 폴링 오류 (%d회 연속): %s", consecutive_failures, e)
+                    if consecutive_failures >= 10:
+                        logger.error("텔레그램 폴링 10회 연속 실패 — 30초 대기")
+                        time.sleep(30)
+                        consecutive_failures = 0
             time.sleep(5)
 
     def send_analysis_result(self, analysis: dict, total_capital: int):
@@ -109,10 +116,11 @@ class TelegramBot:
             sl = pick.get("stopLoss", 0)
             ss = pick.get("sellStrategy", {})
 
-            ez_hi = ez.get("high", 0)
-            t1_pct = f"+{(t1 - ez_hi) / ez_hi * 100:.1f}%" if ez_hi else ""
-            t2_pct = f"+{(t2 - ez_hi) / ez_hi * 100:.1f}%" if ez_hi else ""
-            sl_pct = f"-{(ez.get('low', 0) - sl) / ez.get('low', 1) * 100:.1f}%" if ez.get("low") else ""
+            ez_hi = ez.get("high", 0) or 0
+            ez_lo = ez.get("low", 0) or 0
+            t1_pct = f"+{(t1 - ez_hi) / ez_hi * 100:.1f}%" if ez_hi > 0 else ""
+            t2_pct = f"+{(t2 - ez_hi) / ez_hi * 100:.1f}%" if ez_hi > 0 else ""
+            sl_pct = f"-{abs(ez_lo - sl) / ez_lo * 100:.1f}%" if ez_lo > 0 else ""
 
             msg = (
                 f"━━━ {medal} {rank}순위: {pick.get('name', '')} ({pick.get('symbol', '')}) ━━━\n"
@@ -146,7 +154,7 @@ class TelegramBot:
             f"성공확률: {prob}%\n"
             f"{ra.get('failureFactors', '-')}\n\n"
             f"📋 시장 요약: {summary}\n\n"
-            "━━━\n매수 진행? (ㅇㅇ / ㄴㄴ)"
+            "━━━\n자동 매수 모드 활성화"
         )
         self.send_message(footer)
 
@@ -221,6 +229,38 @@ class TelegramBot:
                 elif txt == "/stop":
                     self.send_message("모니터링 종료합니다.")
                     monitor.should_stop = True
+                elif txt == "/help":
+                    self.send_message(
+                        "📋 <b>명령어 목록</b>\n\n"
+                        "/status — 포지션 현황\n"
+                        "/balance — 계좌 잔고\n"
+                        "/pnl — 오늘 매매 내역\n"
+                        "/cash — 예수금 확인\n"
+                        "/sell 종목코드 — 수동 전량 매도\n"
+                        "/stop — 모니터링 종료\n"
+                        "/help — 명령어 목록"
+                    )
+                elif txt == "/cash":
+                    try:
+                        cash = kis_client.get_available_cash()
+                        self.send_message(f"💰 예수금: {cash:,}원")
+                    except Exception as e:
+                        self.send_message(f"예수금 조회 실패: {e}")
+                elif txt.startswith("/sell "):
+                    code = txt.split(" ", 1)[1].strip()
+                    if code in monitor.positions:
+                        pos = monitor.positions[code]
+                        qty = pos["remaining_qty"]
+                        try:
+                            result = kis_client.place_sell_order(code, qty)
+                            if result.get("rt_cd") == "0":
+                                self.send_message(f"✅ {pos['name']} {qty}주 시장가 매도 주문 완료")
+                            else:
+                                self.send_message(f"⚠️ 매도 실패: {result.get('msg1', '알 수 없음')}")
+                        except Exception as e:
+                            self.send_message(f"매도 오류: {e}")
+                    else:
+                        self.send_message(f"포지션에 {code} 없음. /status로 확인하세요.")
         finally:
             self._update_lock.release()
 

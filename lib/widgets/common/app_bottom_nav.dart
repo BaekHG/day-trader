@@ -35,9 +35,9 @@ class AppBottomNav extends StatelessWidget {
             label: '트레이드',
           ),
           BottomNavigationBarItem(
-            icon: Icon(Icons.menu_book_outlined),
-            activeIcon: Icon(Icons.menu_book_rounded),
-            label: '매매일지',
+            icon: Icon(Icons.smart_toy_outlined),
+            activeIcon: Icon(Icons.smart_toy),
+            label: '봇 리포트',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.auto_awesome_outlined),

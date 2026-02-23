@@ -157,11 +157,16 @@ def _try_reinvest(
         enr = collector.enrich_stocks(
             mdata["volume_ranking"], mdata["stock_news"], mdata["is_market_open"],
         )
+        reinvest_pos = [
+            {"name": p["name"], "code": c, "remaining_qty": p["remaining_qty"]}
+            for c, p in monitor.positions.items()
+        ]
         anal = analyzer.analyze(
             enriched_stocks=enr, up_ranking=mdata["up_ranking"],
             down_ranking=mdata["down_ranking"], kospi_index=mdata["kospi_index"],
             kosdaq_index=mdata["kosdaq_index"], exchange_rate=mdata["exchange_rate"],
             is_market_open=mdata["is_market_open"],
+            current_positions=reinvest_pos or None,
         )
         anal["_kospi"] = mdata["kospi_index"]
         anal["_kosdaq"] = mdata["kosdaq_index"]
@@ -191,7 +196,10 @@ def _try_reinvest(
         new_fills = []
         for attempt in range(4):
             time.sleep(15)
-            new_fills = trader.check_fills(new_success)
+            result = trader.check_fills(new_success)
+            if result is None:
+                continue
+            new_fills = result
             if len(new_fills) >= len(new_success):
                 break
         if new_fills:
@@ -228,7 +236,18 @@ def _try_reinvest(
 
 
 def _get_daily_pnl_pct(monitor: PositionMonitor) -> float:
-    total_pnl = sum(t.get("pnl_amt", 0) for t in monitor.trades_today)
+    """일일 손익률 (실현 + 미실현)."""
+    realized = sum(t.get("pnl_amt", 0) for t in monitor.trades_today)
+    unrealized = 0
+    for code, pos in monitor.positions.items():
+        try:
+            pd = monitor.kis.get_current_price(code)
+            cur = pd["price"]
+            if cur > 0:
+                unrealized += (cur - pos["entry_price"]) * pos["remaining_qty"]
+        except Exception:
+            pass
+    total_pnl = realized + unrealized
     if config.TOTAL_CAPITAL <= 0:
         return 0.0
     return total_pnl / config.TOTAL_CAPITAL * 100
@@ -369,6 +388,10 @@ def _run_one_cycle(
 
     logger.info("Phase 3 — AI 분석 중")
     try:
+        positions_info = [
+            {"name": p["name"], "code": c, "remaining_qty": p["remaining_qty"]}
+            for c, p in monitor.positions.items()
+        ]
         analysis = analyzer.analyze(
             enriched_stocks=enriched,
             up_ranking=market_data["up_ranking"],
@@ -377,6 +400,7 @@ def _run_one_cycle(
             kosdaq_index=market_data["kosdaq_index"],
             exchange_rate=market_data["exchange_rate"],
             is_market_open=market_data["is_market_open"],
+            current_positions=positions_info or None,
         )
     except Exception as e:
         logger.error("AI 분석 실패: %s", e)
@@ -384,7 +408,9 @@ def _run_one_cycle(
         return "error"
 
     logger.info("AI 분석 완료 — 추천: %s", analysis.get("marketAssessment", {}).get("recommendation", "?"))
-    db.save_analysis(analysis)
+    if not db.save_analysis(analysis):
+        logger.warning("AI 분석 DB 저장 실패")
+        bot.send_message("⚠️ AI 분석 결과 DB 저장 실패")
 
     try:
         available_cash = kis.get_available_cash()
@@ -442,15 +468,20 @@ def _run_one_cycle(
         bot.send_message("⏳ 장 시작 전 — 09:02에 체결 확인합니다.")
         wait_until("09:02", bot, kis, monitor)
 
-    logger.info("Phase 8 — 체결 대기 (15초 간격, 최대 3분)")
+    max_attempts = max(config.BUY_CONFIRM_TIMEOUT // 15, 4)
+    logger.info("Phase 8 — 체결 대기 (15초 간격, 최대 %d회)", max_attempts)
     fills = []
-    for attempt in range(12):
+    for attempt in range(max_attempts):
         time.sleep(15)
-        fills = trader.check_fills(success_orders)
+        result = trader.check_fills(success_orders)
+        if result is None:
+            logger.warning("체결 조회 API 오류 — 재시도 (시도 %d/%d)", attempt + 1, max_attempts)
+            continue
+        fills = result
         filled_names = [f["name"] for f in fills]
-        logger.info("체결 %d/%d — %s (시도 %d/12)",
+        logger.info("체결 %d/%d — %s (시도 %d/%d)",
                      len(fills), len(success_orders),
-                     ", ".join(filled_names) or "없음", attempt + 1)
+                     ", ".join(filled_names) or "없음", attempt + 1, max_attempts)
         if len(fills) >= len(success_orders):
             break
 
@@ -473,11 +504,17 @@ def _run_one_cycle(
                     sell_strategy=matching_order.get("sell_strategy"),
                 )
 
-    try:
-        pending = kis.get_pending_orders()
-    except Exception as e:
-        logger.error("미체결 조회 실패: %s", e)
-        pending = []
+    pending = []
+    for pq_attempt in range(3):
+        try:
+            pending = kis.get_pending_orders()
+            break
+        except Exception as e:
+            logger.error("미체결 조회 실패 (시도 %d/3): %s", pq_attempt + 1, e)
+            if pq_attempt < 2:
+                time.sleep(2)
+            else:
+                bot.send_message("⚠️ 미체결 조회 3회 실패 — /balance 로 수동 확인 필요")
 
     if pending:
         logger.info("Phase 8.5 — 미체결 %d건 재분석", len(pending))
@@ -591,7 +628,9 @@ def _send_daily_report(monitor: PositionMonitor, bot: TelegramBot, db: Database 
             {"code": code, "name": pos["name"], "qty": pos["remaining_qty"], "entry": pos["entry_price"]}
             for code, pos in monitor.positions.items()
         ]
-        db.save_daily_report(monitor.trades_today, remaining)
+        if not db.save_daily_report(monitor.trades_today, remaining):
+            logger.warning("일일 리포트 DB 저장 실패")
+            bot.send_message("⚠️ 일일 리포트 DB 저장 실패")
 
     logger.info("일일 리포트 전송 완료")
     logger.info("Day Trader 종료 — %s", now_kst().strftime("%H:%M"))

@@ -9,6 +9,8 @@ abstract final class Formatters {
   static final _dateTimeFormat = DateFormat('yyyy.MM.dd HH:mm');
   static final _shortDateFormat = DateFormat('MM/dd');
   static final _monthDayTimeFormat = DateFormat('MM.dd HH:mm');
+  static final _timeOnlyFormat = DateFormat('HH:mm');
+  static const _dayOfWeekKR = ['월', '화', '수', '목', '금', '토', '일'];
 
   static String formatKRW(int price) {
     return '₩${_krwFormat.format(price)}';
@@ -44,6 +46,23 @@ abstract final class Formatters {
 
   static String formatMonthDayTime(DateTime dt) =>
       _monthDayTimeFormat.format(dt);
+
+  static String formatTimeOnly(DateTime dt) => _timeOnlyFormat.format(dt);
+
+  static String formatDateWithDay(DateTime dt) {
+    final dow = _dayOfWeekKR[dt.weekday - 1];
+    return '${_dateFormat.format(dt)} ($dow)';
+  }
+
+  static String formatDateStringWithDay(String dateStr) {
+    try {
+      final dt = DateTime.parse(dateStr);
+      final dow = _dayOfWeekKR[dt.weekday - 1];
+      return '${_dateFormat.format(dt)} ($dow)';
+    } catch (_) {
+      return dateStr;
+    }
+  }
 
   static String formatPriceByMarket(double price, String market) {
     if (market == 'kr') {

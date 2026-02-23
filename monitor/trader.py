@@ -53,6 +53,14 @@ class Trader:
                 "sell_strategy": pick.get("sellStrategy", {}),
                 "reason": reason_str,
             })
+        total_alloc = sum(o["allocation"] for o in orders)
+        if total_alloc > 100:
+            logger.warning("배분 합계 %d%% > 100%% — 비례 축소", total_alloc)
+            for o in orders:
+                o["allocation"] = round(o["allocation"] * 100 / total_alloc, 1)
+                o["amount"] = int(total_capital * o["allocation"] / 100)
+                o["quantity"] = int(o["amount"] // o["price"]) if o["price"] > 0 else 0
+            orders = [o for o in orders if o["quantity"] >= 1]
         return orders
 
     def execute_buy_orders(self, orders: list[dict]) -> list[dict]:
@@ -237,7 +245,7 @@ class Trader:
             fills_raw = self.kis.get_order_fills()
         except Exception as e:
             logger.error("체결 조회 실패: %s", e)
-            return []
+            return None
 
         order_codes = {o["stock_code"] for o in orders}
         fills = []

@@ -1,6 +1,7 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from threading import Semaphore
 
 import pytz
 
@@ -18,6 +19,7 @@ class MarketDataCollector:
         self.kis = kis
         self.naver_fin = naver_fin
         self.naver_news = naver_news
+        self._kis_semaphore = Semaphore(3)
 
     def is_market_open(self) -> bool:
         now = datetime.now(KST)
@@ -60,13 +62,15 @@ class MarketDataCollector:
             result = dict(item)
 
             try:
-                foreign = self.kis.get_foreign_institution(code)
+                with self._kis_semaphore:
+                    foreign = self.kis.get_foreign_institution(code)
             except Exception:
                 foreign = []
             result["foreign_institution"] = foreign
 
             try:
-                candles = self.kis.get_daily_candles(code)
+                with self._kis_semaphore:
+                    candles = self.kis.get_daily_candles(code)
             except Exception:
                 candles = []
 
@@ -96,7 +100,8 @@ class MarketDataCollector:
 
             if is_market_open:
                 try:
-                    minute = self.kis.get_minute_candles(code)
+                    with self._kis_semaphore:
+                        minute = self.kis.get_minute_candles(code)
                     m5 = []
                     for mc in minute[:12]:
                         m5.append({
@@ -135,6 +140,7 @@ class MarketDataCollector:
         try:
             ranking = self.kis.get_volume_ranking()
             if ranking:
+                logger.info("거래량 순위 소스: KIS (%d종목)", len(ranking))
                 return ranking
         except Exception as e:
             logger.warning("KIS 거래량 순위 실패: %s", e)
@@ -142,10 +148,13 @@ class MarketDataCollector:
         logger.info("네이버 거래량 순위 fallback")
         ranking = self.naver_fin.get_volume_ranking(count=20)
         if ranking:
+            logger.info("거래량 순위 소스: 네이버 거래량 (%d종목)", len(ranking))
             return ranking
 
         logger.info("네이버 시가총액 순위 fallback (장전)")
-        return self.naver_fin.get_market_cap_ranking(count=20)
+        result = self.naver_fin.get_market_cap_ranking(count=20)
+        logger.info("거래량 순위 소스: 네이버 시총 (%d종목)", len(result))
+        return result
 
     def _get_up_ranking(self) -> list[dict]:
         try:

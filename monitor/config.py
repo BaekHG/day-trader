@@ -36,13 +36,13 @@ TRAILING_STOP_LEVELS = [
 # --- 멀티사이클 ---
 MAX_CYCLES = int(os.getenv("MAX_CYCLES", "2"))
 NO_NEW_ENTRY_AFTER = "14:00"   # 이후 신규 진입 차단
-FORCE_CLOSE_TIME = "14:30"     # 전량 강제 청산
+FORCE_CLOSE_TIME = "15:10"     # 전량 강제 청산
 CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "1200"))  # 사이클 간 쿨다운 (초)
 
 # --- 손절 보호 ---
-STOP_LOSS_GRACE_MINUTES = int(os.getenv("STOP_LOSS_GRACE_MINUTES", "2"))  # 진입 후 손절 유예 (분)
+STOP_LOSS_GRACE_MINUTES = int(os.getenv("STOP_LOSS_GRACE_MINUTES", "3"))  # 진입 후 손절 유예 (분)
 MIN_STOP_LOSS_PCT = float(os.getenv("MIN_STOP_LOSS_PCT", "3.0"))  # 최소 손절 거리 (%)
-MAX_ENTRY_DEVIATION_PCT = float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "3.0"))  # 현재가 vs 지정가 허용 괴리 (%)
+MAX_ENTRY_DEVIATION_PCT = float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "5.0"))  # 현재가 vs 지정가 허용 괴리 (%)
 
 # --- 시간 기반 청산 ---
 MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "90"))
@@ -51,8 +51,8 @@ MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "90"))
 DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "-5.0"))
 DAILY_PROFIT_TARGET_PCT = float(os.getenv("DAILY_PROFIT_TARGET_PCT", "5.0"))
 
-MIN_REINVEST_CASH = int(os.getenv("MIN_REINVEST_CASH", "500000"))
-REINVEST_CHECK_INTERVAL = int(os.getenv("REINVEST_CHECK_INTERVAL", "600"))
+MIN_REINVEST_CASH = int(os.getenv("MIN_REINVEST_CASH", "200000"))
+REINVEST_CHECK_INTERVAL = int(os.getenv("REINVEST_CHECK_INTERVAL", "300"))
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

@@ -1,5 +1,7 @@
 import json
 import logging
+import threading
+import time
 from datetime import datetime
 
 import pytz
@@ -21,6 +23,7 @@ class PositionMonitor:
         self.positions: dict[str, dict] = {}
         self.trades_today: list[dict] = []
         self.should_stop = False
+        self._lock = threading.Lock()
         self._load_positions()
         self._load_trades_today()
 
@@ -44,6 +47,10 @@ class PositionMonitor:
             self._save_positions()
 
     def check_positions(self):
+        with self._lock:
+            self._check_positions_locked()
+
+    def _check_positions_locked(self):
         now = datetime.now(KST)
         force_hh, force_mm = map(int, config.FORCE_CLOSE_TIME.split(":"))
 
@@ -138,13 +145,21 @@ class PositionMonitor:
         entry = pos["entry_price"]
         pnl_amt = (price - entry) * qty
 
-        try:
-            result = self.kis.place_sell_order(code, qty)
-            success = result.get("rt_cd") == "0"
-        except Exception as e:
-            logger.error("매도 주문 실패 %s: %s", name, e)
-            self.bot.send_message(f"⚠️ {name} 매도 실패: {e}")
-            return
+        success = False
+        result = {}
+        for sell_attempt in range(3):
+            try:
+                result = self.kis.place_sell_order(code, qty)
+                success = result.get("rt_cd") == "0"
+                if success:
+                    break
+            except Exception as e:
+                logger.error("매도 주문 실패 %s (시도 %d/3): %s", name, sell_attempt + 1, e)
+                if sell_attempt < 2:
+                    time.sleep(2 ** sell_attempt)
+                    continue
+                self.bot.send_message(f"⚠️ {name} 매도 3회 실패: {e}")
+                return
 
         if success:
             pos.pop("_last_sell_error", None)
@@ -168,7 +183,7 @@ class PositionMonitor:
             self._save_trades_today()
 
             if self.db:
-                self.db.save_trade(
+                ok = self.db.save_trade(
                     stock_code=code,
                     stock_name=name,
                     action="sell",
@@ -178,6 +193,8 @@ class PositionMonitor:
                     pnl_amount=pnl_amt,
                     pnl_pct=pnl_pct,
                 )
+                if not ok:
+                    self.bot.send_message(f"⚠️ {name} 매도 기록 DB 저장 실패")
 
             if pos["remaining_qty"] <= qty:
                 self.remove_position(code)
@@ -202,9 +219,9 @@ class PositionMonitor:
                     if actual_qty < qty:
                         pos["remaining_qty"] = actual_qty
                         self._save_positions()
-                        self.bot.send_message(
-                            f"⚠️ {name} 잔량 불일치 — {qty}주→{actual_qty}주 수정"
-                        )
+                        self.bot.send_message(f"⚠️ {name} 잔량 불일치 — {qty}주→{actual_qty}주, {actual_qty}주 즉시 매도")
+                        if actual_qty > 0:
+                            self._execute_sell(code, pos, actual_qty, price, reason, pnl_pct)
                         return
                 except Exception as e2:
                     logger.error("잔고 확인 실패: %s", e2)
