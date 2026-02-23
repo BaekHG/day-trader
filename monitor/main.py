@@ -313,9 +313,10 @@ def run_daily_cycle():
         wait_until(config.ANALYSIS_TIME, bot, kis, monitor)
 
     cycle = 0
-    while not _past_entry_cutoff():
+    consecutive_losses = 0
+    while not _past_entry_cutoff() and cycle < config.MAX_CYCLES:
         cycle += 1
-        logger.info("━━━ 사이클 %d 시작 ━━━", cycle)
+        logger.info("━━━ 사이클 %d/%d 시작 ━━━", cycle, config.MAX_CYCLES)
 
         daily_pnl = _get_daily_pnl_pct(monitor)
         if daily_pnl <= config.DAILY_LOSS_LIMIT_PCT:
@@ -326,13 +327,26 @@ def run_daily_cycle():
             logger.info("일일 수익목표 달성 (%.1f%%) — 사이클 중단", daily_pnl)
             bot.send_message(f"🎯 일일 수익목표 달성 ({daily_pnl:.1f}%) — 매매 중단")
             break
+        if consecutive_losses >= config.MAX_CONSECUTIVE_LOSSES:
+            logger.info("%d연패 — 당일 매매 중단", consecutive_losses)
+            bot.send_message(f"🛑 {consecutive_losses}연패 — 당일 매매 중단 (리스크 관리)")
+            break
 
+        trades_before = len(monitor.trades_today)
         exit_reason = _run_one_cycle(
             cycle, kis, bot, db, collector, analyzer, trader, monitor, sold_codes,
         )
-        for t in monitor.trades_today:
+        for t in monitor.trades_today[trades_before:]:
             if "code" in t and t.get("pnl_amt", 0) < 0:
                 sold_codes.add(t["code"])
+
+        new_trades = monitor.trades_today[trades_before:]
+        if new_trades:
+            last_pnl = new_trades[-1].get("pnl_amt", 0)
+            if last_pnl < 0:
+                consecutive_losses += 1
+            else:
+                consecutive_losses = 0
 
         if exit_reason != "positions_cleared":
             break
@@ -340,7 +354,7 @@ def run_daily_cycle():
         if monitor.should_stop:
             break
 
-        if not _past_entry_cutoff():
+        if not _past_entry_cutoff() and cycle < config.MAX_CYCLES:
             logger.info("쿨다운 %d초 시작", config.CYCLE_COOLDOWN)
             bot.send_message(f"⏸ 사이클 {cycle} 완료 — {config.CYCLE_COOLDOWN // 60}분 쿨다운")
             cooldown_end = time.time() + config.CYCLE_COOLDOWN
@@ -464,9 +478,9 @@ def _run_one_cycle(
     order_map = {o["stock_code"]: o for o in success_orders}
 
     if not collector.is_market_open():
-        logger.info("장 시작 전 — 09:02까지 대기 후 체결 확인")
-        bot.send_message("⏳ 장 시작 전 — 09:02에 체결 확인합니다.")
-        wait_until("09:02", bot, kis, monitor)
+        logger.info("장 시작 전 — 09:05까지 대기 (첫 5분봉 확인)")
+        bot.send_message("⏳ 장 시작 전 — 09:05 첫 5분봉 확인 후 체결합니다.")
+        wait_until("09:05", bot, kis, monitor)
 
     max_attempts = max(config.BUY_CONFIRM_TIMEOUT // 15, 4)
     logger.info("Phase 8 — 체결 대기 (15초 간격, 최대 %d회)", max_attempts)

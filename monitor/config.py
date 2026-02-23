@@ -24,35 +24,42 @@ TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "2.0"))  # % drop from 
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "10"))  # seconds
 TELEGRAM_MIN_INTERVAL = 60  # seconds between repeated alerts per stock
 
-# --- 프로그레시브 트레일링 스톱 ---
-# (고점 수익률 %, 손절선 %) — 고점이 7%+ 찍으면 5%에서 손절, 등등
+# --- 프로그레시브 트레일링 스톱 (공격적 트레일링 only — 고정 타겟 없음) ---
+# (고점 수익률 %, 보호선 %) — 고정 매도 타겟 없이 트레일링만으로 수익 실현
+# 상승 추세가 계속되면 보호선이 올라가며 수익을 극대화
 TRAILING_STOP_LEVELS = [
-    (7.0, 5.0),
-    (5.0, 3.0),
-    (3.0, 1.0),
-    (2.0, 0.0),
+    (5.0, 4.0),   # +5% 찍으면 최소 +4% 보호
+    (3.0, 2.2),   # +3% 찍으면 최소 +2.2% 보호
+    (2.0, 1.5),   # +2% 찍으면 최소 +1.5% 보호
+    (1.5, 0.8),   # +1.5% 찍으면 최소 +0.8% 보호
+    (1.0, 0.3),   # +1% 찍으면 최소 +0.3% 보호 (수수료 커버)
 ]
 
 # --- 멀티사이클 ---
 MAX_CYCLES = int(os.getenv("MAX_CYCLES", "2"))
-NO_NEW_ENTRY_AFTER = "14:00"   # 이후 신규 진입 차단
+NO_NEW_ENTRY_AFTER = "10:30"   # 오전장 집중 — 이후 신규 진입 차단
 FORCE_CLOSE_TIME = "15:10"     # 전량 강제 청산
 CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "1200"))  # 사이클 간 쿨다운 (초)
 
-# --- 손절 보호 ---
-STOP_LOSS_GRACE_MINUTES = int(os.getenv("STOP_LOSS_GRACE_MINUTES", "3"))  # 진입 후 손절 유예 (분)
-MIN_STOP_LOSS_PCT = float(os.getenv("MIN_STOP_LOSS_PCT", "3.0"))  # 최소 손절 거리 (%)
-MAX_ENTRY_DEVIATION_PCT = float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "5.0"))  # 현재가 vs 지정가 허용 괴리 (%)
+# --- 손절 보호 (소자본 타이트 관리) ---
+STOP_LOSS_GRACE_MINUTES = int(os.getenv("STOP_LOSS_GRACE_MINUTES", "2"))  # 진입 후 손절 유예 (분)
+MIN_STOP_LOSS_PCT = float(os.getenv("MIN_STOP_LOSS_PCT", "1.2"))  # 최소 손절 거리 (%)
+MAX_ENTRY_DEVIATION_PCT = float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "3.0"))  # 현재가 vs 지정가 허용 괴리 (%)
 
 # --- 시간 기반 청산 ---
-MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "90"))
+MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "30"))
 
-# --- 일일 리스크 관리 ---
-DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "-5.0"))
-DAILY_PROFIT_TARGET_PCT = float(os.getenv("DAILY_PROFIT_TARGET_PCT", "5.0"))
+# --- 일일 리스크 관리 (보수적) ---
+DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "-1.5"))
+DAILY_PROFIT_TARGET_PCT = float(os.getenv("DAILY_PROFIT_TARGET_PCT", "2.0"))
+MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2"))  # 연패 시 당일 중단
 
 MIN_REINVEST_CASH = int(os.getenv("MIN_REINVEST_CASH", "200000"))
 REINVEST_CHECK_INTERVAL = int(os.getenv("REINVEST_CHECK_INTERVAL", "300"))
+
+# --- 포지션 사이징 ---
+MAX_PICKS = int(os.getenv("MAX_PICKS", "1"))            # 최대 동시 보유 종목 수
+MAX_POSITION_PCT = int(os.getenv("MAX_POSITION_PCT", "70"))  # 종목당 자본 배분 한도 (%)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

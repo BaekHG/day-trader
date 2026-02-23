@@ -109,26 +109,11 @@ class PositionMonitor:
                     self._execute_sell(code, pos, remaining, current, reason, pnl_pct)
                     continue
 
-            if current >= pos["target1"] and not pos["target1_hit"]:
-                sell_qty = remaining // 2
-                if sell_qty < 1:
-                    sell_qty = remaining
-                self._execute_sell(code, pos, sell_qty, current, "1차 목표 도달", pnl_pct)
-                if remaining - sell_qty > 0:
-                    pos["target1_hit"] = True
-                    pos["remaining_qty"] = remaining - sell_qty
-                    self._save_positions()
-                continue
-
-            if current >= pos["target2"] and pos["target1_hit"]:
-                self._execute_sell(code, pos, remaining, current, "2차 목표 도달", pnl_pct)
-                continue
-
             entry_time_str = pos.get("entry_time", "")
             if entry_time_str:
                 entry_dt = datetime.fromisoformat(entry_time_str)
                 hold_minutes = (now - entry_dt).total_seconds() / 60
-                if hold_minutes >= config.MAX_HOLD_MINUTES and not pos["target1_hit"] and abs(pnl_pct) < 1.0:
+                if hold_minutes >= config.MAX_HOLD_MINUTES and abs(pnl_pct) < 1.0:
                     self._execute_sell(
                         code, pos, remaining, current,
                         f"{config.MAX_HOLD_MINUTES}분 횡보 — 전량 매도", pnl_pct,
@@ -314,13 +299,11 @@ class PositionMonitor:
                 entry = h["avg_price"]
                 if entry <= 0:
                     continue
-                target1 = int(entry * 1.05)
-                target2 = int(entry * 1.10)
-                stop_loss = int(entry * 0.97)
+                stop_loss = int(entry * (1 - config.MIN_STOP_LOSS_PCT / 100))
                 self.add_position(
                     stock_code=code, name=h["name"],
                     quantity=h["quantity"], entry_price=entry,
-                    target1=target1, target2=target2, stop_loss=stop_loss,
+                    target1=0, target2=0, stop_loss=stop_loss,
                 )
                 added.append(h)
                 logger.info("동기화 추가: %s %d주 @ %s원", h["name"], h["quantity"], f"{entry:,}")

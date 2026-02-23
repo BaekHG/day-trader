@@ -134,7 +134,55 @@ class MarketDataCollector:
                     logger.error("enrichment 실패 [%d]: %s", idx, e)
                     results[idx] = top10[idx]
 
-        return [r for r in results if r is not None]
+        all_enriched = [r for r in results if r is not None]
+        filtered = self._apply_hard_filters(all_enriched, is_market_open)
+        if filtered:
+            logger.info("하드 필터 통과: %d/%d 종목", len(filtered), len(all_enriched))
+            return filtered
+        logger.warning("하드 필터 통과 종목 0개 — 전체 %d종목 AI에게 전달", len(all_enriched))
+        return all_enriched
+
+    @staticmethod
+    def _apply_hard_filters(stocks: list[dict], is_market_open: bool) -> list[dict]:
+        passed = []
+        for s in stocks:
+            name = s.get("hts_kor_isnm", "?")
+            change_pct = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
+
+            if change_pct >= 10.0:
+                logger.info("필터 제외 [+10%%↑ 급등]: %s (%.1f%%)", name, change_pct)
+                continue
+
+            if is_market_open and not (1.0 <= change_pct <= 4.0):
+                logger.info("필터 제외 [등락률 1~4%% 미충족]: %s (%.1f%%)", name, change_pct)
+                continue
+
+            raw_tv = str(s.get("acml_tr_pbmn", "0")).replace(",", "")
+            trading_value = int(raw_tv) if raw_tv.isdigit() else 0
+            if trading_value > 0 and trading_value < 10_000_000_000:
+                logger.info("필터 제외 [거래대금 100억 미만]: %s (%s)", name, f"{trading_value:,}")
+                continue
+
+            pos_from_high = s.get("position_from_high", -999)
+            if isinstance(pos_from_high, (int, float)) and pos_from_high < -5.0:
+                logger.info("필터 제외 [고점 대비 -5%% 초과 하락]: %s (%.1f%%)", name, pos_from_high)
+                continue
+
+            foreign = s.get("foreign_institution", [])
+            if foreign:
+                consec_buy = 0
+                for d in foreign[:5]:
+                    qty = int(str(d.get("frgn_ntby_qty", "0")).replace(",", "") or "0")
+                    if qty > 0:
+                        consec_buy += 1
+                    else:
+                        break
+                if consec_buy < 2:
+                    logger.info("필터 제외 [외국인 2일 연속매수 미충족]: %s (%d일)", name, consec_buy)
+                    continue
+
+            passed.append(s)
+        return passed
 
     def _get_volume_ranking(self) -> list[dict]:
         try:

@@ -20,11 +20,11 @@ class Trader:
     ) -> list[dict]:
         sold_codes = sold_codes or set()
         orders = []
-        for pick in picks:
+        for pick in picks[:config.MAX_PICKS]:
             if pick["symbol"] in sold_codes:
                 logger.info("손실종목 재진입 차단: %s (%s)", pick["name"], pick["symbol"])
                 continue
-            alloc = pick.get("allocation", 0)
+            alloc = min(pick.get("allocation", 0), config.MAX_POSITION_PCT)
             if alloc <= 0:
                 continue
             allocated = total_capital * alloc / 100
@@ -53,11 +53,12 @@ class Trader:
                 "sell_strategy": pick.get("sellStrategy", {}),
                 "reason": reason_str,
             })
+        max_alloc = config.MAX_POSITION_PCT * config.MAX_PICKS
         total_alloc = sum(o["allocation"] for o in orders)
-        if total_alloc > 100:
-            logger.warning("배분 합계 %d%% > 100%% — 비례 축소", total_alloc)
+        if total_alloc > max_alloc:
+            logger.warning("배분 합계 %d%% > %d%% — 비례 축소", total_alloc, max_alloc)
             for o in orders:
-                o["allocation"] = round(o["allocation"] * 100 / total_alloc, 1)
+                o["allocation"] = round(o["allocation"] * max_alloc / total_alloc, 1)
                 o["amount"] = int(total_capital * o["allocation"] / 100)
                 o["quantity"] = int(o["amount"] // o["price"]) if o["price"] > 0 else 0
             orders = [o for o in orders if o["quantity"] >= 1]
