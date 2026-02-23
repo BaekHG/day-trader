@@ -449,38 +449,100 @@ def _run_one_cycle(
             return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "no_picks"
 
-    bot.send_message(f"🔄 사이클 {cycle + 1} — 자동 매수 진행")
+    bot.send_message(f"🔄 사이클 {cycle + 1} — 후보 선정 완료, 장 시작 대기")
 
+    # ── Phase 5 — 장 시작 대기 + 오프닝 검증 ──
+    if not collector.is_market_open():
+        logger.info("장 시작 전 — %s까지 대기 (첫 5분봉 확인)", config.OPENING_WAIT_TIME)
+        bot.send_message(f"⏳ 장 시작 전 — {config.OPENING_WAIT_TIME} 첫 5분봉 확인 후 매수 판단합니다.")
+        wait_until(config.OPENING_WAIT_TIME, bot, kis, monitor)
+
+    logger.info("Phase 5 — 오프닝 검증 (실시간 데이터 확인)")
+    validated_picks = []
+    for pick in picks:
+        symbol = pick["symbol"]
+        name = pick["name"]
+        try:
+            price_data = kis.get_current_price(symbol)
+            cur_price = price_data["price"]
+            change_pct = price_data["change_pct"]
+            volume = price_data["volume"]
+            logger.info(
+                "%s 오프닝: %s원 (%+.1f%%), 거래량 %s",
+                name, f"{cur_price:,}", change_pct, f"{volume:,}",
+            )
+        except Exception as e:
+            logger.warning("%s 현재가 조회 실패 — 검증 스킵: %s", name, e)
+            bot.send_message(f"⚠️ {name} 현재가 조회 실패 — 매수 스킵")
+            continue
+
+        # 갭다운 필터: 전일 대비 급락 시 스킵
+        if change_pct < config.OPENING_MAX_GAP_DOWN_PCT:
+            msg = (
+                f"❌ {name} 오프닝 탈락 — "
+                f"갭다운 {change_pct:+.1f}% (한도 {config.OPENING_MAX_GAP_DOWN_PCT}%)"
+            )
+            logger.info(msg)
+            bot.send_message(msg)
+            continue
+
+        # 갭업 필터: 이미 너무 올라간 경우 추격매수 방지
+        if change_pct > config.OPENING_MAX_GAP_UP_PCT:
+            msg = (
+                f"❌ {name} 오프닝 탈락 — "
+                f"갭업 {change_pct:+.1f}% (한도 +{config.OPENING_MAX_GAP_UP_PCT}%) 추격매수 방지"
+            )
+            logger.info(msg)
+            bot.send_message(msg)
+            continue
+
+        # 거래량 필터: 유동성 부족 시 스킵
+        if volume < config.OPENING_MIN_VOLUME:
+            msg = (
+                f"❌ {name} 오프닝 탈락 — "
+                f"거래량 {volume:,} < 최소 {config.OPENING_MIN_VOLUME:,}"
+            )
+            logger.info(msg)
+            bot.send_message(msg)
+            continue
+
+        # 검증 통과
+        logger.info("%s 오프닝 검증 통과 ✓", name)
+        validated_picks.append(pick)
+
+    if not validated_picks:
+        bot.send_message("📊 오프닝 검증 결과: 모든 후보 탈락 — 매수 없이 모니터링")
+        if monitor.positions:
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
+        return "opening_filtered"
+
+    passed_names = ", ".join(p["name"] for p in validated_picks)
+    bot.send_message(
+        f"✅ 오프닝 검증 통과: {passed_names}\n"
+        f"({len(validated_picks)}/{len(picks)}개 통과) — 매수 진행"
+    )
+
+    # ── Phase 7 — 매수 주문 실행 ──
     logger.info("Phase 7 — 매수 주문 실행")
-    orders = trader.calculate_orders(picks, available_cash, sold_codes)
+    orders = trader.calculate_orders(validated_picks, available_cash, sold_codes)
     if not orders:
         bot.send_message("주문 가능한 종목이 없습니다.")
         if monitor.positions:
             return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "no_orders"
-
     bot.send_buy_orders(orders)
     results = trader.execute_buy_orders(orders)
-
     success_orders = [r for r in results if r["success"]]
     fail_orders = [r for r in results if not r["success"]]
-
     if fail_orders:
         fail_msg = "\n".join(f"  {o['name']}: {o['message']}" for o in fail_orders)
         bot.send_message(f"⚠️ 매수 실패:\n{fail_msg}")
-
     if not success_orders:
         bot.send_message("모든 매수 주문 실패.")
         if monitor.positions:
             return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "all_failed"
-
     order_map = {o["stock_code"]: o for o in success_orders}
-
-    if not collector.is_market_open():
-        logger.info("장 시작 전 — 09:05까지 대기 (첫 5분봉 확인)")
-        bot.send_message("⏳ 장 시작 전 — 09:05 첫 5분봉 확인 후 체결합니다.")
-        wait_until("09:05", bot, kis, monitor)
 
     max_attempts = max(config.BUY_CONFIRM_TIMEOUT // 15, 4)
     logger.info("Phase 8 — 체결 대기 (15초 간격, 최대 %d회)", max_attempts)
