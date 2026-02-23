@@ -147,6 +147,7 @@ class PositionMonitor:
             return
 
         if success:
+            pos.pop("_last_sell_error", None)
             emoji = "🟢" if pnl_amt >= 0 else "🔴"
             sign = "+" if pnl_pct >= 0 else ""
             msg = (
@@ -185,7 +186,34 @@ class PositionMonitor:
                 self._save_positions()
         else:
             err = result.get("msg1", "알 수 없음")
-            self.bot.send_message(f"⚠️ {name} 매도 실패: {err}")
+            # "수량 초과" 오류 → 이미 매도된 상태일 가능성 → 실잔고 확인
+            if "수량" in err and "초과" in err:
+                logger.warning("%s 수량 초과 — 실잔고 확인 후 포지션 정리", name)
+                try:
+                    holdings = self.kis.get_balance()
+                    held = {h["stock_code"]: h for h in holdings}
+                    if code not in held:
+                        self.bot.send_message(
+                            f"🔄 {name} 이미 매도 확인 — 포지션 자동 정리"
+                        )
+                        self.remove_position(code)
+                        return
+                    actual_qty = held[code]["quantity"]
+                    if actual_qty < qty:
+                        pos["remaining_qty"] = actual_qty
+                        self._save_positions()
+                        self.bot.send_message(
+                            f"⚠️ {name} 잔량 불일치 — {qty}주→{actual_qty}주 수정"
+                        )
+                        return
+                except Exception as e2:
+                    logger.error("잔고 확인 실패: %s", e2)
+            # 동일 에러 반복 방지: 이미 실패한 포지션은 에러 표시 저장
+            last_err = pos.get("_last_sell_error", "")
+            if err != last_err:
+                self.bot.send_message(f"⚠️ {name} 매도 실패: {err}")
+                pos["_last_sell_error"] = err
+                self._save_positions()
 
     def get_daily_summary(self) -> str:
         if not self.trades_today and not self.positions:
