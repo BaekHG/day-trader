@@ -27,7 +27,7 @@ class _BotReportScreenState extends ConsumerState<BotReportScreen>
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
   }
 
   @override
@@ -58,6 +58,7 @@ class _BotReportScreenState extends ConsumerState<BotReportScreen>
           controller: _tabController,
           tabs: const [
             Tab(text: '거래내역'),
+            Tab(text: '전략 성과'),
             Tab(text: 'AI분석'),
             Tab(text: '일일리포트'),
           ],
@@ -67,6 +68,7 @@ class _BotReportScreenState extends ConsumerState<BotReportScreen>
         controller: _tabController,
         children: [
           const _TradesTab(),
+          const _StrategyTab(),
           const _AnalysesTab(),
           _DailyReportsTab(),
         ],
@@ -470,6 +472,16 @@ class _TradeItem extends StatelessWidget {
 
   final BotTrade trade;
 
+  Color _exitTypeColor(BotTrade t) {
+    return switch (t.exitTypeLabel) {
+      '트레일링' => AppColors.accent,
+      '손절' => AppColors.loss,
+      '시간청산' => AppColors.warning,
+      '강제청산' => AppColors.textTertiary,
+      _ => AppColors.info,
+    };
+  }
+
   @override
   Widget build(BuildContext context) {
     final isBuy = trade.isBuy;
@@ -613,7 +625,6 @@ class _TradeItem extends StatelessWidget {
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
                     '실현손익',
@@ -622,6 +633,7 @@ class _TradeItem extends StatelessWidget {
                       fontSize: 12,
                     ),
                   ),
+                  const Spacer(),
                   ProfitLossText(
                     amount: trade.pnlAmount.toDouble(),
                     percentage: trade.pnlPct,
@@ -630,8 +642,54 @@ class _TradeItem extends StatelessWidget {
                 ],
               ),
             ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                if (trade.exitTypeLabel.isNotEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 3,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _exitTypeColor(trade).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      trade.exitTypeLabel,
+                      style: TextStyle(
+                        color: _exitTypeColor(trade),
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                if (trade.holdMinutes > 0) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    trade.holdMinutes >= 60
+                        ? '${(trade.holdMinutes / 60).toStringAsFixed(1)}시간 보유'
+                        : '${trade.holdMinutes.toStringAsFixed(0)}분 보유',
+                    style: const TextStyle(
+                      color: AppColors.textTertiary,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+                if (trade.highWaterMarkPct > 0) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    '고점 +${trade.highWaterMarkPct.toStringAsFixed(1)}%',
+                    style: const TextStyle(
+                      color: AppColors.textTertiary,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ],
+            ),
           ],
-          if (trade.reason.isNotEmpty) ...[
+          if (trade.isBuy && trade.reason.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
               trade.reason,
@@ -643,6 +701,813 @@ class _TradeItem extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+// ==================== STRATEGY TAB ====================
+
+class _StrategyTab extends ConsumerWidget {
+  const _StrategyTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tradesAsync = ref.watch(botTradesProvider);
+    final reportsAsync = ref.watch(dailyReportsProvider);
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        ref.invalidate(botTradesProvider);
+        ref.invalidate(dailyReportsProvider);
+      },
+      color: AppColors.accent,
+      backgroundColor: AppColors.card,
+      child: tradesAsync.when(
+        loading: () => const StockListShimmer(itemCount: 6),
+        error: (err, _) => EmptyState(
+          icon: Icons.error_outline,
+          message: '데이터 로드 실패',
+          submessage: err.toString(),
+        ),
+        data: (trades) {
+          final sells = trades.where((t) => t.isSell).toList();
+          if (sells.isEmpty) {
+            return const EmptyState(
+              icon: Icons.analytics_outlined,
+              message: '전략 성과 데이터 없음',
+              submessage: '매도 거래가 발생하면 분석 결과가 표시됩니다',
+            );
+          }
+
+          final wins = sells.where((t) => t.pnlAmount > 0).toList();
+          final losses = sells.where((t) => t.pnlAmount < 0).toList();
+          final winRate = sells.isNotEmpty
+              ? (wins.length / sells.length * 100)
+              : 0.0;
+          final avgProfit = wins.isNotEmpty
+              ? wins.map((t) => t.pnlAmount).reduce((a, b) => a + b) /
+                    wins.length
+              : 0.0;
+          final avgLoss = losses.isNotEmpty
+              ? losses.map((t) => t.pnlAmount).reduce((a, b) => a + b) /
+                    losses.length
+              : 0.0;
+          final riskReward = avgLoss != 0 ? (avgProfit / avgLoss.abs()) : 0.0;
+
+          final reports = reportsAsync.valueOrNull ?? [];
+
+          return ListView(
+            padding: const EdgeInsets.only(top: 8, bottom: 100),
+            children: [
+              _StrategySummaryCard(
+                totalSells: sells.length,
+                winRate: winRate,
+                avgProfit: avgProfit,
+                avgLoss: avgLoss,
+                riskReward: riskReward,
+              ),
+              _ExitTypeSection(sells: sells),
+              _TrailingEfficiencySection(sells: sells),
+              _HoldTimeSection(sells: sells),
+              if (reports.length >= 2) _WinRateTrendChart(reports: reports),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _StrategySummaryCard extends StatelessWidget {
+  const _StrategySummaryCard({
+    required this.totalSells,
+    required this.winRate,
+    required this.avgProfit,
+    required this.avgLoss,
+    required this.riskReward,
+  });
+
+  final int totalSells;
+  final double winRate;
+  final double avgProfit;
+  final double avgLoss;
+  final double riskReward;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.accentDim,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: const Text(
+                  'OVERVIEW',
+                  style: TextStyle(
+                    color: AppColors.accent,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                '총 $totalSells건 매도',
+                style: const TextStyle(
+                  color: AppColors.textTertiary,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _StatBlock(
+                  label: '승률',
+                  value: '${winRate.toStringAsFixed(1)}%',
+                  color: winRate >= 50 ? AppColors.profit : AppColors.loss,
+                ),
+              ),
+              Container(width: 0.5, height: 44, color: AppColors.border),
+              Expanded(
+                child: _StatBlock(
+                  label: '평균 수익',
+                  value: Formatters.formatKRW(avgProfit.toInt()),
+                  color: AppColors.profit,
+                ),
+              ),
+              Container(width: 0.5, height: 44, color: AppColors.border),
+              Expanded(
+                child: _StatBlock(
+                  label: '평균 손실',
+                  value: Formatters.formatKRW(avgLoss.toInt()),
+                  color: AppColors.loss,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text(
+                  'Risk:Reward',
+                  style: TextStyle(color: AppColors.textTertiary, fontSize: 12),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  '1 : ${riskReward.toStringAsFixed(2)}',
+                  style: TextStyle(
+                    color: riskReward >= 1.5
+                        ? AppColors.profit
+                        : riskReward >= 1.0
+                        ? AppColors.warning
+                        : AppColors.loss,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatBlock extends StatelessWidget {
+  const _StatBlock({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: AppColors.textTertiary, fontSize: 11),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(
+            color: color,
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ExitTypeSection extends StatelessWidget {
+  const _ExitTypeSection({required this.sells});
+
+  final List<BotTrade> sells;
+
+  @override
+  Widget build(BuildContext context) {
+    final exitCounts = <String, int>{};
+    for (final t in sells) {
+      final label = t.exitTypeLabel;
+      exitCounts[label] = (exitCounts[label] ?? 0) + 1;
+    }
+    if (exitCounts.isEmpty) return const SizedBox.shrink();
+
+    final colorMap = {
+      '트레일링': AppColors.accent,
+      '손절': AppColors.loss,
+      '시간청산': AppColors.warning,
+      '강제청산': AppColors.textTertiary,
+      '수동': AppColors.info,
+    };
+
+    final sortedEntries = exitCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    final sections = <PieChartSectionData>[];
+    for (final entry in sortedEntries) {
+      final pct = entry.value / sells.length * 100;
+      final color = colorMap[entry.key] ?? AppColors.textSecondary;
+      sections.add(
+        PieChartSectionData(
+          value: entry.value.toDouble(),
+          color: color,
+          radius: 28,
+          title: '${pct.toStringAsFixed(0)}%',
+          titleStyle: const TextStyle(
+            color: AppColors.textPrimary,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.pie_chart_outline,
+                size: 16,
+                color: AppColors.accent,
+              ),
+              const SizedBox(width: 6),
+              const Text(
+                '매도 사유 분포',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 120,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 120,
+                  height: 120,
+                  child: PieChart(
+                    PieChartData(
+                      sections: sections,
+                      centerSpaceRadius: 24,
+                      sectionsSpace: 2,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 24),
+                Expanded(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: sortedEntries.map((entry) {
+                      final color =
+                          colorMap[entry.key] ?? AppColors.textSecondary;
+                      final pct = entry.value / sells.length * 100;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 10,
+                              height: 10,
+                              decoration: BoxDecoration(
+                                color: color,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                entry.key,
+                                style: const TextStyle(
+                                  color: AppColors.textSecondary,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ),
+                            Text(
+                              '${entry.value}건 (${pct.toStringAsFixed(0)}%)',
+                              style: const TextStyle(
+                                color: AppColors.textPrimary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                fontFeatures: [FontFeature.tabularFigures()],
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TrailingEfficiencySection extends StatelessWidget {
+  const _TrailingEfficiencySection({required this.sells});
+
+  final List<BotTrade> sells;
+
+  @override
+  Widget build(BuildContext context) {
+    final trailingTrades = sells
+        .where((t) => t.exitType == 'trailing' || t.reason.contains('트레일링'))
+        .toList();
+
+    if (trailingTrades.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border, width: 0.5),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.trending_up, size: 16, color: AppColors.accent),
+            const SizedBox(width: 6),
+            const Text(
+              '트레일링 효율',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            const Text(
+              '데이터 수집 중',
+              style: TextStyle(color: AppColors.textTertiary, fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final avgPeak =
+        trailingTrades.map((t) => t.highWaterMarkPct).reduce((a, b) => a + b) /
+        trailingTrades.length;
+    final avgRealized =
+        trailingTrades.map((t) => t.pnlPct).reduce((a, b) => a + b) /
+        trailingTrades.length;
+    final captureRate = avgPeak > 0 ? (avgRealized / avgPeak * 100) : 0.0;
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.trending_up, size: 16, color: AppColors.accent),
+              const SizedBox(width: 6),
+              const Text(
+                '트레일링 효율',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${trailingTrades.length}건',
+                style: const TextStyle(
+                  color: AppColors.textTertiary,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _StatBlock(
+                    label: '평균 고점',
+                    value: '+${avgPeak.toStringAsFixed(1)}%',
+                    color: AppColors.accent,
+                  ),
+                ),
+                Container(width: 0.5, height: 36, color: AppColors.border),
+                Expanded(
+                  child: _StatBlock(
+                    label: '평균 실현',
+                    value:
+                        '${avgRealized >= 0 ? '+' : ''}${avgRealized.toStringAsFixed(1)}%',
+                    color: avgRealized >= 0 ? AppColors.profit : AppColors.loss,
+                  ),
+                ),
+                Container(width: 0.5, height: 36, color: AppColors.border),
+                Expanded(
+                  child: _StatBlock(
+                    label: '수익 캡처율',
+                    value: '${captureRate.toStringAsFixed(0)}%',
+                    color: captureRate >= 70
+                        ? AppColors.profit
+                        : captureRate >= 50
+                        ? AppColors.warning
+                        : AppColors.loss,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _HoldTimeSection extends StatelessWidget {
+  const _HoldTimeSection({required this.sells});
+
+  final List<BotTrade> sells;
+
+  @override
+  Widget build(BuildContext context) {
+    final withHold = sells.where((t) => t.holdMinutes > 0).toList();
+    if (withHold.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.border, width: 0.5),
+        ),
+        child: Row(
+          children: [
+            const Icon(Icons.timer_outlined, size: 16, color: AppColors.accent),
+            const SizedBox(width: 6),
+            const Text(
+              '보유 시간 분석',
+              style: TextStyle(
+                color: AppColors.textSecondary,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            const Text(
+              '데이터 수집 중',
+              style: TextStyle(color: AppColors.textTertiary, fontSize: 12),
+            ),
+          ],
+        ),
+      );
+    }
+
+    final avgHold =
+        withHold.map((t) => t.holdMinutes).reduce((a, b) => a + b) /
+        withHold.length;
+    final minHold = withHold.map((t) => t.holdMinutes).reduce(math.min);
+    final maxHold = withHold.map((t) => t.holdMinutes).reduce(math.max);
+
+    String formatMinutes(double m) {
+      if (m >= 60) return '${(m / 60).toStringAsFixed(1)}시간';
+      return '${m.toStringAsFixed(0)}분';
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.timer_outlined,
+                size: 16,
+                color: AppColors.accent,
+              ),
+              const SizedBox(width: 6),
+              const Text(
+                '보유 시간 분석',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '${withHold.length}건',
+                style: const TextStyle(
+                  color: AppColors.textTertiary,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _StatBlock(
+                    label: '최소',
+                    value: formatMinutes(minHold),
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                Container(width: 0.5, height: 36, color: AppColors.border),
+                Expanded(
+                  child: _StatBlock(
+                    label: '평균',
+                    value: formatMinutes(avgHold),
+                    color: AppColors.accent,
+                  ),
+                ),
+                Container(width: 0.5, height: 36, color: AppColors.border),
+                Expanded(
+                  child: _StatBlock(
+                    label: '최대',
+                    value: formatMinutes(maxHold),
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WinRateTrendChart extends StatelessWidget {
+  const _WinRateTrendChart({required this.reports});
+
+  final List<DailyReport> reports;
+
+  @override
+  Widget build(BuildContext context) {
+    final chartData = reports.reversed.toList();
+    final displayData = chartData.length > 14
+        ? chartData.sublist(chartData.length - 14)
+        : chartData;
+    if (displayData.length < 2) return const SizedBox.shrink();
+
+    final spots = <FlSpot>[];
+    for (int i = 0; i < displayData.length; i++) {
+      spots.add(FlSpot(i.toDouble(), displayData[i].winRate));
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppColors.border, width: 0.5),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.show_chart, size: 16, color: AppColors.accent),
+              const SizedBox(width: 6),
+              const Text(
+                '일별 승률 추이',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Spacer(),
+              Text(
+                '최근 ${displayData.length}일',
+                style: const TextStyle(
+                  color: AppColors.textTertiary,
+                  fontSize: 12,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 120,
+            child: LineChart(
+              LineChartData(
+                gridData: FlGridData(
+                  show: true,
+                  drawVerticalLine: false,
+                  horizontalInterval: 25,
+                  getDrawingHorizontalLine: (value) => FlLine(
+                    color: value == 50
+                        ? AppColors.warning.withValues(alpha: 0.4)
+                        : AppColors.border.withValues(alpha: 0.3),
+                    strokeWidth: value == 50 ? 1 : 0.5,
+                    dashArray: value == 50 ? [4, 4] : null,
+                  ),
+                ),
+                titlesData: FlTitlesData(
+                  show: true,
+                  topTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  rightTitles: const AxisTitles(
+                    sideTitles: SideTitles(showTitles: false),
+                  ),
+                  leftTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 32,
+                      interval: 50,
+                      getTitlesWidget: (value, meta) {
+                        if (value == 0 || value == 50 || value == 100) {
+                          return Text(
+                            '${value.toInt()}%',
+                            style: const TextStyle(
+                              color: AppColors.textTertiary,
+                              fontSize: 9,
+                            ),
+                          );
+                        }
+                        return const SizedBox.shrink();
+                      },
+                    ),
+                  ),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      reservedSize: 20,
+                      interval: 1,
+                      getTitlesWidget: (value, meta) {
+                        final idx = value.toInt();
+                        if (idx < 0 || idx >= displayData.length) {
+                          return const SizedBox.shrink();
+                        }
+                        if (displayData.length > 7 && idx % 2 != 0) {
+                          return const SizedBox.shrink();
+                        }
+                        final dateStr = displayData[idx].reportDate;
+                        final short = dateStr.length >= 10
+                            ? '${dateStr.substring(5, 7)}/${dateStr.substring(8, 10)}'
+                            : dateStr;
+                        return Text(
+                          short,
+                          style: const TextStyle(
+                            color: AppColors.textTertiary,
+                            fontSize: 9,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                borderData: FlBorderData(show: false),
+                minY: 0,
+                maxY: 100,
+                lineBarsData: [
+                  LineChartBarData(
+                    spots: spots,
+                    isCurved: true,
+                    color: AppColors.accent,
+                    barWidth: 2,
+                    isStrokeCapRound: true,
+                    dotData: FlDotData(
+                      show: true,
+                      getDotPainter: (spot, percent, barData, index) =>
+                          FlDotCirclePainter(
+                            radius: 3,
+                            color: spot.y >= 50
+                                ? AppColors.profit
+                                : AppColors.loss,
+                            strokeWidth: 1.5,
+                            strokeColor: AppColors.card,
+                          ),
+                    ),
+                    belowBarData: BarAreaData(
+                      show: true,
+                      color: AppColors.accent.withValues(alpha: 0.08),
+                    ),
+                  ),
+                ],
+                lineTouchData: LineTouchData(
+                  touchTooltipData: LineTouchTooltipData(
+                    getTooltipColor: (_) => AppColors.surface,
+                    tooltipRoundedRadius: 6,
+                    getTooltipItems: (touchedSpots) {
+                      return touchedSpots.map((spot) {
+                        final report = displayData[spot.x.toInt()];
+                        return LineTooltipItem(
+                          '${Formatters.formatDateStringWithDay(report.reportDate)}\n승률 ${spot.y.toStringAsFixed(1)}% (${report.winCount}승 ${report.lossCount}패)',
+                          const TextStyle(
+                            color: AppColors.textPrimary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        );
+                      }).toList();
+                    },
+                  ),
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -1507,7 +2372,6 @@ class _DailyPnlChart extends StatelessWidget {
                         if (idx < 0 || idx >= displayData.length) {
                           return const SizedBox.shrink();
                         }
-                        // Show every other label if too many
                         if (displayData.length > 7 && idx % 2 != 0) {
                           return const SizedBox.shrink();
                         }
@@ -1563,7 +2427,125 @@ class _DailyPnlChart extends StatelessWidget {
               ),
             ),
           ),
+          if (displayData.length >= 2) ...[
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                const Icon(Icons.show_chart, size: 14, color: AppColors.accent),
+                const SizedBox(width: 6),
+                const Text(
+                  '누적 손익 곡선',
+                  style: TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 100,
+              child: _buildCumulativeLineChart(displayData, cumulativeData),
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  Widget _buildCumulativeLineChart(
+    List<DailyReport> displayData,
+    List<int> cumulativeData,
+  ) {
+    final spots = <FlSpot>[];
+    for (int i = 0; i < cumulativeData.length; i++) {
+      spots.add(FlSpot(i.toDouble(), cumulativeData[i].toDouble()));
+    }
+
+    final maxAbs = cumulativeData.map((v) => v.abs()).reduce(math.max);
+    final yBound = (maxAbs * 1.3).toDouble();
+    final isPositive = cumulativeData.last >= 0;
+
+    return LineChart(
+      LineChartData(
+        gridData: FlGridData(
+          show: true,
+          drawVerticalLine: false,
+          horizontalInterval: yBound > 0 ? yBound : 1,
+          getDrawingHorizontalLine: (value) => FlLine(
+            color: value == 0
+                ? AppColors.textTertiary.withValues(alpha: 0.3)
+                : AppColors.border.withValues(alpha: 0.2),
+            strokeWidth: value == 0 ? 1 : 0.5,
+          ),
+        ),
+        titlesData: FlTitlesData(
+          show: true,
+          topTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          rightTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          leftTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+          bottomTitles: const AxisTitles(
+            sideTitles: SideTitles(showTitles: false),
+          ),
+        ),
+        borderData: FlBorderData(show: false),
+        minY: -yBound,
+        maxY: yBound,
+        lineBarsData: [
+          LineChartBarData(
+            spots: spots,
+            isCurved: true,
+            preventCurveOverShooting: true,
+            color: isPositive ? AppColors.profit : AppColors.loss,
+            barWidth: 2,
+            isStrokeCapRound: true,
+            dotData: FlDotData(
+              show: true,
+              getDotPainter: (spot, percent, barData, index) {
+                final dotPositive = spot.y >= 0;
+                return FlDotCirclePainter(
+                  radius: 2.5,
+                  color: dotPositive ? AppColors.profit : AppColors.loss,
+                  strokeWidth: 1,
+                  strokeColor: AppColors.card,
+                );
+              },
+            ),
+            belowBarData: BarAreaData(
+              show: true,
+              color: (isPositive ? AppColors.profit : AppColors.loss)
+                  .withValues(alpha: 0.06),
+            ),
+          ),
+        ],
+        lineTouchData: LineTouchData(
+          touchTooltipData: LineTouchTooltipData(
+            getTooltipColor: (_) => AppColors.surface,
+            tooltipRoundedRadius: 6,
+            getTooltipItems: (touchedSpots) {
+              return touchedSpots.map((spot) {
+                final idx = spot.x.toInt();
+                final report = displayData[idx];
+                final cumPnl = cumulativeData[idx];
+                return LineTooltipItem(
+                  '${Formatters.formatDateStringWithDay(report.reportDate)}\n누적 ${cumPnl >= 0 ? '+' : ''}${Formatters.formatKRW(cumPnl)}',
+                  TextStyle(
+                    color: cumPnl >= 0 ? AppColors.profit : AppColors.loss,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                );
+              }).toList();
+            },
+          ),
+        ),
       ),
     );
   }

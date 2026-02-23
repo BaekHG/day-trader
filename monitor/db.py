@@ -88,6 +88,9 @@ class Database:
         pnl_amount: int = 0,
         pnl_pct: float = 0.0,
         odno: str = "",
+        exit_type: str = "",
+        hold_minutes: float = 0.0,
+        high_water_mark_pct: float = 0.0,
     ) -> bool:
         data = {
             "stock_code": stock_code,
@@ -103,6 +106,10 @@ class Database:
         }
         if odno:
             data["odno"] = odno
+        if action == "sell":
+            data["exit_type"] = exit_type
+            data["hold_minutes"] = round(hold_minutes, 1)
+            data["high_water_mark_pct"] = round(high_water_mark_pct, 2)
         return self._post("trades", data)
 
     # ──────────────────────────────────────

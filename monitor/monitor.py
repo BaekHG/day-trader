@@ -130,6 +130,31 @@ class PositionMonitor:
         entry = pos["entry_price"]
         pnl_amt = (price - entry) * qty
 
+        now = datetime.now(KST)
+        hold_minutes = 0.0
+        entry_time_str = pos.get("entry_time", "")
+        if entry_time_str:
+            try:
+                et = datetime.fromisoformat(entry_time_str)
+                hold_minutes = (now - et).total_seconds() / 60
+            except (ValueError, TypeError):
+                pass
+
+        high_water_mark_pct = 0.0
+        if entry > 0:
+            high_water_mark_pct = (pos.get("high_since_entry", entry) - entry) / entry * 100
+
+        if "트레일링" in reason:
+            exit_type = "trailing"
+        elif "손절" in reason:
+            exit_type = "stop_loss"
+        elif "횡보" in reason or "분" in reason and "매도" in reason:
+            exit_type = "time_exit"
+        elif "강제" in reason:
+            exit_type = "force_close"
+        else:
+            exit_type = "manual"
+
         success = False
         result = {}
         for sell_attempt in range(3):
@@ -164,6 +189,8 @@ class PositionMonitor:
                 "code": code, "name": name, "qty": qty,
                 "entry": entry, "exit": price,
                 "pnl_amt": pnl_amt, "pnl_pct": round(pnl_pct, 1), "reason": reason,
+                "exit_type": exit_type, "hold_minutes": round(hold_minutes, 1),
+                "high_water_mark_pct": round(high_water_mark_pct, 2),
             })
             self._save_trades_today()
 
@@ -177,6 +204,9 @@ class PositionMonitor:
                     reason=reason,
                     pnl_amount=pnl_amt,
                     pnl_pct=pnl_pct,
+                    exit_type=exit_type,
+                    hold_minutes=hold_minutes,
+                    high_water_mark_pct=high_water_mark_pct,
                 )
                 if not ok:
                     self.bot.send_message(f"⚠️ {name} 매도 기록 DB 저장 실패")
