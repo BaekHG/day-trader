@@ -102,6 +102,31 @@ def past_analysis_time() -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _recalc_stop_loss(fill_price: int, order_price: int, ai_stop: int) -> int:
+    """체결가 기준으로 손절가를 재계산한다.
+
+    AI가 지정가(order_price) 기준으로 산출한 손절가(ai_stop)의 '비율'을
+    실제 체결가(fill_price)에 적용하여 최소 MIN_STOP_LOSS_PCT 이상의
+    거리를 보장한다.
+    """
+    if order_price > 0 and ai_stop > 0:
+        stop_pct = (order_price - ai_stop) / order_price  # AI 의도 손절 비율
+    else:
+        stop_pct = 0
+
+    # 최소 손절 거리 보장
+    min_pct = config.MIN_STOP_LOSS_PCT / 100
+    stop_pct = max(stop_pct, min_pct)
+
+    adjusted = int(fill_price * (1 - stop_pct))
+    logger.info(
+        "손절가 재계산: 주문가 %s → 체결가 %s | AI손절 %s → 조정 %s (%.1f%%)",
+        f"{order_price:,}", f"{fill_price:,}", f"{ai_stop:,}",
+        f"{adjusted:,}", stop_pct * 100,
+    )
+    return adjusted
+
+
 def _past_entry_cutoff() -> bool:
     hh, mm = map(int, config.NO_NEW_ENTRY_AFTER.split(":"))
     n = now_kst()
@@ -174,11 +199,14 @@ def _try_reinvest(
             for nf in new_fills:
                 mo = new_map.get(nf["stock_code"])
                 if mo:
+                    adjusted_stop = _recalc_stop_loss(
+                        nf["price"], mo["price"], mo["stop_loss"],
+                    )
                     monitor.add_position(
                         stock_code=nf["stock_code"], name=nf["name"],
                         quantity=nf["quantity"], entry_price=nf["price"],
                         target1=mo["target1"], target2=mo["target2"],
-                        stop_loss=mo["stop_loss"],
+                        stop_loss=adjusted_stop,
                         sell_strategy=mo.get("sell_strategy"),
                     )
                     sold_codes.add(nf["stock_code"])
@@ -432,6 +460,9 @@ def _run_one_cycle(
         for f in fills:
             matching_order = order_map.get(f["stock_code"])
             if matching_order:
+                adjusted_stop = _recalc_stop_loss(
+                    f["price"], matching_order["price"], matching_order["stop_loss"],
+                )
                 monitor.add_position(
                     stock_code=f["stock_code"],
                     name=f["name"],
@@ -439,7 +470,7 @@ def _run_one_cycle(
                     entry_price=f["price"],
                     target1=matching_order["target1"],
                     target2=matching_order["target2"],
-                    stop_loss=matching_order["stop_loss"],
+                    stop_loss=adjusted_stop,
                     sell_strategy=matching_order.get("sell_strategy"),
                 )
 
@@ -475,6 +506,11 @@ def _run_one_cycle(
                     time.sleep(10)
                     retry_fills = trader.check_fills([r])
                     for rf in retry_fills:
+                        adjusted_stop = _recalc_stop_loss(
+                            rf["price"],
+                            r.get("retry_price", rf["price"]),
+                            r.get("stop_loss", 0),
+                        )
                         monitor.add_position(
                             stock_code=rf["stock_code"],
                             name=rf["name"],
@@ -482,7 +518,7 @@ def _run_one_cycle(
                             entry_price=rf["price"],
                             target1=r.get("target1", 0),
                             target2=r.get("target2", 0),
-                            stop_loss=r.get("stop_loss", 0),
+                            stop_loss=adjusted_stop,
                             sell_strategy=r.get("sell_strategy"),
                         )
     elif not fills:

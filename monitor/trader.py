@@ -1,5 +1,6 @@
 import logging
 
+import config
 from ai_analyzer import AIAnalyzer
 from db import Database
 from kis_client import KISClient
@@ -58,6 +59,54 @@ class Trader:
         results = []
         for order in orders:
             try:
+                # ── 현재가 확인 및 주문가 조정 ──
+                try:
+                    price_data = self.kis.get_current_price(order["stock_code"])
+                    current_price = price_data["price"]
+                except Exception as e:
+                    logger.warning("%s 현재가 조회 실패 — AI 지정가 그대로 사용: %s", order["name"], e)
+                    current_price = 0
+
+                if current_price > 0:
+                    ai_price = order["price"]
+                    deviation_pct = abs(current_price - ai_price) / ai_price * 100 if ai_price > 0 else 0
+
+                    if current_price > ai_price * (1 + config.MAX_ENTRY_DEVIATION_PCT / 100):
+                        # 현재가가 AI 지정가보다 너무 높음 → 매수 스킵
+                        msg = (
+                            f"현재가({current_price:,}) > 지정가({ai_price:,}) "
+                            f"{deviation_pct:.1f}%↑ — 진입구간 이탈로 매수 스킵"
+                        )
+                        logger.warning("%s %s", order["name"], msg)
+                        self.bot.send_message(f"⏭ {order['name']} {msg}")
+                        results.append({**order, "success": False, "message": msg})
+                        continue
+
+                    # 현재가 기준으로 주문가 조정 (현재 시장가로 매수)
+                    if current_price != ai_price:
+                        logger.info(
+                            "%s 주문가 조정: AI %s → 현재가 %s (%.1f%%)",
+                            order["name"], f"{ai_price:,}", f"{current_price:,}", deviation_pct,
+                        )
+                        order["price"] = current_price
+                        order["quantity"] = int(order["amount"] // current_price) if current_price > 0 else order["quantity"]
+                        if order["quantity"] < 1:
+                            results.append({**order, "success": False, "message": "현재가 기준 수량 부족"})
+                            continue
+                        order["amount"] = order["quantity"] * current_price
+
+                        # 손절가도 현재가 기준으로 재계산
+                        if ai_price > 0 and order.get("stop_loss", 0) > 0:
+                            stop_pct = (ai_price - order["stop_loss"]) / ai_price
+                        else:
+                            stop_pct = 0
+                        stop_pct = max(stop_pct, config.MIN_STOP_LOSS_PCT / 100)
+                        order["stop_loss"] = int(current_price * (1 - stop_pct))
+                        logger.info(
+                            "%s 손절가 조정: → %s원 (%.1f%%)",
+                            order["name"], f"{order['stop_loss']:,}", stop_pct * 100,
+                        )
+
                 result = self.kis.place_buy_order(
                     order["stock_code"], order["quantity"], order["price"],
                 )
