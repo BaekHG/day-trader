@@ -39,6 +39,11 @@ NO_NEW_ENTRY_AFTER = "14:00"   # 이후 신규 진입 차단
 FORCE_CLOSE_TIME = "14:30"     # 전량 강제 청산
 CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "1200"))  # 사이클 간 쿨다운 (초)
 
+# --- 손절 보호 ---
+STOP_LOSS_GRACE_MINUTES = int(os.getenv("STOP_LOSS_GRACE_MINUTES", "2"))  # 진입 후 손절 유예 (분)
+MIN_STOP_LOSS_PCT = float(os.getenv("MIN_STOP_LOSS_PCT", "3.0"))  # 최소 손절 거리 (%)
+MAX_ENTRY_DEVIATION_PCT = float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "3.0"))  # 현재가 vs 지정가 허용 괴리 (%)
+
 # --- 시간 기반 청산 ---
 MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "90"))
 

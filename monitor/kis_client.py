@@ -79,7 +79,7 @@ class KISClient:
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-cash"
         body = {
             "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
-            "PDNO": stock_code, "ORD_DVSN": "01", "ORD_QTY": str(quantity), "ORD_UNPR": str(price),
+            "PDNO": stock_code, "ORD_DVSN": "01", "ORD_QTY": str(quantity), "ORD_UNPR": "0",
         }
         resp = requests.post(url, headers=self._headers("TTTC0011U"), json=body, timeout=10)
         resp.raise_for_status()
