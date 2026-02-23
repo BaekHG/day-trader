@@ -50,6 +50,23 @@ class Database:
             logger.error("DB 연결 실패 [%s]: %s", table, e)
             return False
 
+    def _delete(self, table: str, column: str, value: str) -> bool:
+        if not self.enabled:
+            return False
+        try:
+            resp = requests.delete(
+                f"{self.url}/rest/v1/{table}?{column}=eq.{value}",
+                headers=self.headers,
+                timeout=10,
+            )
+            if resp.status_code in (200, 204):
+                return True
+            logger.error("DB delete 실패 [%s]: %s %s", table, resp.status_code, resp.text[:200])
+            return False
+        except Exception as e:
+            logger.error("DB 연결 실패 [%s]: %s", table, e)
+            return False
+
     # ──────────────────────────────────────
     # 매매 기록
     # ──────────────────────────────────────
@@ -112,8 +129,10 @@ class Database:
         win = sum(1 for t in trades if t.get("pnl_amt", 0) > 0)
         loss = sum(1 for t in trades if t.get("pnl_amt", 0) < 0)
 
+        report_date = datetime.now(KST).strftime("%Y-%m-%d")
+        self._delete("daily_reports", "report_date", report_date)
         return self._post("daily_reports", {
-            "report_date": datetime.now(KST).strftime("%Y-%m-%d"),
+            "report_date": report_date,
             "total_trades": len(trades),
             "total_pnl": total_pnl,
             "total_pnl_pct": round(total_pnl_pct, 2),
