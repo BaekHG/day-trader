@@ -504,14 +504,44 @@ def _run_one_cycle(
         for f in fills:
             matching_order = order_map.get(f["stock_code"])
             if matching_order:
+                fill_price = f["price"]
+                order_price = matching_order["price"]
+                if fill_price > 0 and order_price > 0:
+                    fill_dev = abs(fill_price - order_price) / order_price * 100
+                    if fill_dev > config.MAX_ENTRY_DEVIATION_PCT:
+                        sign = "↑" if fill_price > order_price else "↓"
+                        msg = (
+                            f"⚠️ {f['name']} 체결가 괴리 경고\n"
+                            f"주문가: {order_price:,}원 → 체결가: {fill_price:,}원 ({fill_dev:.1f}%{sign})\n"
+                            f"시장 급변동 — 모니터링 주의"
+                        )
+                        bot.send_message(msg)
+                        logger.warning("%s 체결가 괴리 %.1f%% (주문 %s → 체결 %s)",
+                                       f["name"], fill_dev, f"{order_price:,}", f"{fill_price:,}")
+                try:
+                    fresh = kis.get_current_price(f["stock_code"])
+                    fresh_price = fresh["price"]
+                    if fresh_price > 0 and fill_price > 0:
+                        cur_vs_fill = (fresh_price - fill_price) / fill_price * 100
+                        if cur_vs_fill < -config.MIN_STOP_LOSS_PCT:
+                            msg = (
+                                f"🚨 {f['name']} 체결 직후 급락 감지\n"
+                                f"체결가: {fill_price:,}원 → 현재가: {fresh_price:,}원 ({cur_vs_fill:.1f}%)\n"
+                                f"손절선 이미 하회 — 즉시 매도 예정"
+                            )
+                            bot.send_message(msg)
+                            logger.warning("%s 체결 직후 현재가 이미 손절선 하회 (%.1f%%)", f["name"], cur_vs_fill)
+                except Exception as e:
+                    logger.warning("%s 체결 후 현재가 확인 실패: %s", f["name"], e)
+
                 adjusted_stop = _recalc_stop_loss(
-                    f["price"], matching_order["price"], matching_order["stop_loss"],
+                    fill_price, order_price, matching_order["stop_loss"],
                 )
                 monitor.add_position(
                     stock_code=f["stock_code"],
                     name=f["name"],
                     quantity=f["quantity"],
-                    entry_price=f["price"],
+                    entry_price=fill_price,
                     target1=matching_order["target1"],
                     target2=matching_order["target2"],
                     stop_loss=adjusted_stop,

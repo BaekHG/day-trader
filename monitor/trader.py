@@ -76,23 +76,37 @@ class Trader:
                     logger.warning("%s 현재가 조회 실패 — AI 지정가 그대로 사용: %s", order["name"], e)
                     current_price = 0
 
-                if current_price > 0:
-                    ai_price = order["price"]
-                    deviation_pct = abs(current_price - ai_price) / ai_price * 100 if ai_price > 0 else 0
+                if current_price <= 0:
+                    msg = "현재가 조회 실패 — 블라인드 주문 방지를 위해 매수 스킵"
+                    logger.warning("%s %s", order["name"], msg)
+                    self.bot.send_message(f"⏭ {order['name']} {msg}")
+                    results.append({**order, "success": False, "message": msg})
+                    continue
 
-                    if current_price > ai_price * (1 + config.MAX_ENTRY_DEVIATION_PCT / 100):
-                        # 현재가가 AI 지정가보다 너무 높음 → 매수 스킵
-                        msg = (
-                            f"현재가({current_price:,}) > 지정가({ai_price:,}) "
-                            f"{deviation_pct:.1f}%↑ — 진입구간 이탈로 매수 스킵"
-                        )
-                        logger.warning("%s %s", order["name"], msg)
-                        self.bot.send_message(f"⏭ {order['name']} {msg}")
-                        results.append({**order, "success": False, "message": msg})
-                        continue
+                ai_price = order["price"]
+                deviation_pct = abs(current_price - ai_price) / ai_price * 100 if ai_price > 0 else 0
 
-                    # 현재가 기준으로 주문가 조정 (현재 시장가로 매수)
-                    if current_price != ai_price:
+                if current_price > ai_price * (1 + config.MAX_ENTRY_DEVIATION_PCT / 100):
+                    msg = (
+                        f"현재가({current_price:,}) > 지정가({ai_price:,}) "
+                        f"{deviation_pct:.1f}%↑ — 진입구간 이탈로 매수 스킵"
+                    )
+                    logger.warning("%s %s", order["name"], msg)
+                    self.bot.send_message(f"⏭ {order['name']} {msg}")
+                    results.append({**order, "success": False, "message": msg})
+                    continue
+
+                if ai_price > current_price * (1 + config.MAX_ENTRY_DEVIATION_PCT / 100):
+                    msg = (
+                        f"지정가({ai_price:,}) > 현재가({current_price:,}) "
+                        f"{deviation_pct:.1f}%↑ — 지정가 과대 괴리로 매수 스킵"
+                    )
+                    logger.warning("%s %s", order["name"], msg)
+                    self.bot.send_message(f"⏭ {order['name']} {msg}")
+                    results.append({**order, "success": False, "message": msg})
+                    continue
+
+                if current_price != ai_price:
                         logger.info(
                             "%s 주문가 조정: AI %s → 현재가 %s (%.1f%%)",
                             order["name"], f"{ai_price:,}", f"{current_price:,}", deviation_pct,
