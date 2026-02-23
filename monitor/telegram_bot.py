@@ -25,6 +25,7 @@ class TelegramBot:
         self._poll_paused = False
         self._poll_kis = None
         self._poll_monitor = None
+        self._reinvest_requested = False
 
     def send_message(self, text: str) -> bool:
         if not self.token or not self.chat_id:
@@ -229,6 +230,12 @@ class TelegramBot:
                 elif txt == "/stop":
                     self.send_message("모니터링 종료합니다.")
                     monitor.should_stop = True
+                elif txt == "/reinvest":
+                    if self._reinvest_requested:
+                        self.send_message("이미 재투자 요청 중입니다. 잠시 대기해주세요.")
+                    else:
+                        self._reinvest_requested = True
+                        self.send_message("💰 재투자 요청 접수 — 잔여 현금으로 추가 매수를 진행합니다.")
                 elif txt == "/help":
                     self.send_message(
                         "📋 <b>명령어 목록</b>\n\n"
@@ -236,6 +243,7 @@ class TelegramBot:
                         "/balance — 계좌 잔고\n"
                         "/pnl — 오늘 매매 내역\n"
                         "/cash — 예수금 확인\n"
+                        "/reinvest — 잔여 현금 즉시 재투자\n"
                         "/sell 종목코드 — 수동 전량 매도\n"
                         "/stop — 모니터링 종료\n"
                         "/help — 명령어 목록"

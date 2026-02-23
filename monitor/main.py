@@ -607,12 +607,14 @@ def _run_monitoring_loop(
         except Exception as e:
             logger.error("텔레그램 업데이트 처리 오류: %s", e)
 
-        if (collector and analyzer and trader
-                and time.time() - last_reinvest >= config.REINVEST_CHECK_INTERVAL
-                and not _past_entry_cutoff()
-                and is_market_hours()):
-            last_reinvest = time.time()
-            _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes or set())
+        if collector and analyzer and trader and is_market_hours():
+            manual = bot._reinvest_requested
+            if manual:
+                bot._reinvest_requested = False
+            if manual or (time.time() - last_reinvest >= config.REINVEST_CHECK_INTERVAL
+                          and not _past_entry_cutoff()):
+                last_reinvest = time.time()
+                _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes or set())
 
         time.sleep(config.CHECK_INTERVAL)
 
