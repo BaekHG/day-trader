@@ -292,12 +292,10 @@ def run_daily_cycle():
     if not past_analysis_time():
         wait_until(config.ANALYSIS_TIME, bot, kis, monitor)
 
-    for cycle in range(config.MAX_CYCLES):
-        logger.info("━━━ 사이클 %d/%d 시작 ━━━", cycle + 1, config.MAX_CYCLES)
-
-        if _past_entry_cutoff():
-            logger.info("신규 진입 마감 (%s) — 사이클 중단", config.NO_NEW_ENTRY_AFTER)
-            break
+    cycle = 0
+    while not _past_entry_cutoff():
+        cycle += 1
+        logger.info("━━━ 사이클 %d 시작 ━━━", cycle)
 
         daily_pnl = _get_daily_pnl_pct(monitor)
         if daily_pnl <= config.DAILY_LOSS_LIMIT_PCT:
@@ -317,23 +315,21 @@ def run_daily_cycle():
         if exit_reason != "positions_cleared":
             break
 
-        if cycle < config.MAX_CYCLES - 1:
-            if _past_entry_cutoff():
-                logger.info("다음 사이클 진입 마감 — 종료")
-                break
+        if monitor.should_stop:
+            break
+
+        if not _past_entry_cutoff():
             logger.info("쿨다운 %d초 시작", config.CYCLE_COOLDOWN)
-            bot.send_message(f"⏸ 사이클 {cycle + 1} 완료 — {config.CYCLE_COOLDOWN // 60}분 쿨다운")
+            bot.send_message(f"⏸ 사이클 {cycle} 완료 — {config.CYCLE_COOLDOWN // 60}분 쿨다운")
             cooldown_end = time.time() + config.CYCLE_COOLDOWN
             while time.time() < cooldown_end:
                 try:
                     bot.process_updates(kis, monitor)
                 except Exception:
                     pass
-                if monitor.should_stop:
+                if monitor.should_stop or _past_entry_cutoff():
                     break
                 time.sleep(min(30, cooldown_end - time.time()))
-            if monitor.should_stop:
-                break
 
     _send_daily_report(monitor, bot, db)
     return bot
