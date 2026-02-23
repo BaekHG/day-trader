@@ -22,7 +22,7 @@ class Trader:
         orders = []
         for pick in picks:
             if pick["symbol"] in sold_codes:
-                logger.info("동일종목 재진입 차단: %s (%s)", pick["name"], pick["symbol"])
+                logger.info("손실종목 재진입 차단: %s (%s)", pick["name"], pick["symbol"])
                 continue
             alloc = pick.get("allocation", 0)
             if alloc <= 0:

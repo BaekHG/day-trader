@@ -209,7 +209,6 @@ def _try_reinvest(
                         stop_loss=adjusted_stop,
                         sell_strategy=mo.get("sell_strategy"),
                     )
-                    sold_codes.add(nf["stock_code"])
 
         filled_codes = {nf["stock_code"] for nf in new_fills}
         unfilled = [o for o in new_success if o["stock_code"] not in filled_codes]
@@ -272,7 +271,9 @@ def run_daily_cycle():
     bot.send_message(f"🔔 Day Trader 시작 ({now_kst().strftime('%Y.%m.%d %H:%M')})")
 
     sold_codes: set[str] = set()
-    sold_codes.update(t["code"] for t in monitor.trades_today if "code" in t)
+    for t in monitor.trades_today:
+        if "code" in t and t.get("pnl_amt", 0) < 0:
+            sold_codes.add(t["code"])
 
     if monitor.positions and past_analysis_time():
         logger.info("기존 포지션 %d개 감지 — 모니터링 재개", len(monitor.positions))
@@ -310,7 +311,9 @@ def run_daily_cycle():
         exit_reason = _run_one_cycle(
             cycle, kis, bot, db, collector, analyzer, trader, monitor, sold_codes,
         )
-        sold_codes.update(t["code"] for t in monitor.trades_today if "code" in t)
+        for t in monitor.trades_today:
+            if "code" in t and t.get("pnl_amt", 0) < 0:
+                sold_codes.add(t["code"])
 
         if exit_reason != "positions_cleared":
             break
@@ -558,7 +561,7 @@ def _run_monitoring_loop(
                 logger.error("포지션 체크 오류: %s", e)
             if len(monitor.trades_today) > trades_before:
                 for t in monitor.trades_today[trades_before:]:
-                    if t.get("code") and t["code"] not in monitor.positions and sold_codes is not None:
+                    if t.get("code") and sold_codes is not None and t.get("pnl_amt", 0) < 0:
                         sold_codes.add(t["code"])
                 last_reinvest = 0
 
