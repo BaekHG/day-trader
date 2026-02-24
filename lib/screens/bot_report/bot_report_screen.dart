@@ -686,6 +686,39 @@ class _TradeItem extends StatelessWidget {
                     ),
                   ),
                 ],
+                if (trade.score > 0) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.accent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '스코어 ${trade.score}',
+                      style: const TextStyle(
+                        color: AppColors.accent,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ],
+                if (trade.slippagePct != 0.0) ...[
+                  const SizedBox(width: 6),
+                  Text(
+                    '슬리피지 ${trade.slippagePct >= 0 ? "+" : ""}${trade.slippagePct.toStringAsFixed(2)}%',
+                    style: TextStyle(
+                      color: trade.slippagePct > 0
+                          ? AppColors.loss
+                          : AppColors.profit,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
               ],
             ),
           ],

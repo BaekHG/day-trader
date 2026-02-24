@@ -15,6 +15,8 @@ class BotTrade extends Equatable {
   final String exitType;
   final double holdMinutes;
   final double highWaterMarkPct;
+  final double slippagePct;
+  final int score;
 
   const BotTrade({
     this.id,
@@ -31,6 +33,8 @@ class BotTrade extends Equatable {
     this.exitType = '',
     this.holdMinutes = 0.0,
     this.highWaterMarkPct = 0.0,
+    this.slippagePct = 0.0,
+    this.score = 0,
   });
 
   bool get isBuy => action == 'buy';
@@ -51,6 +55,8 @@ class BotTrade extends Equatable {
     String? exitType,
     double? holdMinutes,
     double? highWaterMarkPct,
+    double? slippagePct,
+    int? score,
   }) {
     return BotTrade(
       id: id ?? this.id,
@@ -67,6 +73,8 @@ class BotTrade extends Equatable {
       exitType: exitType ?? this.exitType,
       holdMinutes: holdMinutes ?? this.holdMinutes,
       highWaterMarkPct: highWaterMarkPct ?? this.highWaterMarkPct,
+      slippagePct: slippagePct ?? this.slippagePct,
+      score: score ?? this.score,
     );
   }
 
@@ -89,6 +97,8 @@ class BotTrade extends Equatable {
       holdMinutes: (json['hold_minutes'] as num?)?.toDouble() ?? 0.0,
       highWaterMarkPct:
           (json['high_water_mark_pct'] as num?)?.toDouble() ?? 0.0,
+      slippagePct: (json['slippage_pct'] as num?)?.toDouble() ?? 0.0,
+      score: (json['score'] as num?)?.toInt() ?? 0,
     );
   }
 
@@ -127,6 +137,8 @@ class BotTrade extends Equatable {
       'exit_type': exitType,
       'hold_minutes': holdMinutes,
       'high_water_mark_pct': highWaterMarkPct,
+      'slippage_pct': slippagePct,
+      'score': score,
     };
   }
 
@@ -146,5 +158,7 @@ class BotTrade extends Equatable {
     exitType,
     holdMinutes,
     highWaterMarkPct,
+    slippagePct,
+    score,
   ];
 }
