@@ -36,7 +36,7 @@ TRAILING_STOP_LEVELS = [
 ]
 
 # --- 멀티사이클 ---
-MAX_CYCLES = int(os.getenv("MAX_CYCLES", "2"))
+MAX_CYCLES = int(os.getenv("MAX_CYCLES", "5"))
 NO_NEW_ENTRY_AFTER = "10:30"   # 오전장 집중 — 이후 신규 진입 차단
 FORCE_CLOSE_TIME = "15:10"     # 전량 강제 청산
 CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "1200"))  # 사이클 간 쿨다운 (초)
