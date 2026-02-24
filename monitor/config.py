@@ -35,11 +35,23 @@ TRAILING_STOP_LEVELS = [
     (0.8, 0.4),   # +0.8% 찍으면 최소 +0.4% 보호 (수수료 커버)
 ]
 
-# --- 멀티사이클 ---
+# --- 멀티사이클 (오전) ---
 MAX_CYCLES = int(os.getenv("MAX_CYCLES", "5"))
 NO_NEW_ENTRY_AFTER = "10:30"   # 오전장 집중 — 이후 신규 진입 차단
 FORCE_CLOSE_TIME = "15:10"     # 전량 강제 청산
 CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "1200"))  # 사이클 간 쿨다운 (초)
+
+# --- 오후 전략 (시간대별 분기) ---
+AFTERNOON_ENABLED = os.getenv("AFTERNOON_ENABLED", "true").lower() == "true"
+AFTERNOON_PHASE_START = os.getenv("AFTERNOON_PHASE_START", "11:00")
+AFTERNOON_PHASE_END = os.getenv("AFTERNOON_PHASE_END", "14:30")
+AFTERNOON_MAX_CYCLES = int(os.getenv("AFTERNOON_MAX_CYCLES", "3"))
+AFTERNOON_MAX_POSITION_PCT = int(os.getenv("AFTERNOON_MAX_POSITION_PCT", "50"))
+AFTERNOON_MAX_HOLD_MINUTES = int(os.getenv("AFTERNOON_MAX_HOLD_MINUTES", "20"))
+AFTERNOON_MIN_STOP_LOSS_PCT = float(os.getenv("AFTERNOON_MIN_STOP_LOSS_PCT", "1.5"))
+AFTERNOON_CYCLE_COOLDOWN = int(os.getenv("AFTERNOON_CYCLE_COOLDOWN", "900"))  # 15분
+AFTERNOON_HARD_FILTER_CHANGE_MIN = float(os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MIN", "-0.5"))
+AFTERNOON_HARD_FILTER_CHANGE_MAX = float(os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MAX", "3.0"))
 
 # --- 손절 보호 (소자본 타이트 관리) ---
 STOP_LOSS_GRACE_MINUTES = int(os.getenv("STOP_LOSS_GRACE_MINUTES", "2"))  # 진입 후 손절 유예 (분)

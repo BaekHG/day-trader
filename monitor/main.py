@@ -133,12 +133,39 @@ def _past_entry_cutoff() -> bool:
     return n.hour > hh or (n.hour == hh and n.minute >= mm)
 
 
+def _past_afternoon_cutoff() -> bool:
+    hh, mm = map(int, config.AFTERNOON_PHASE_END.split(":"))
+    n = now_kst()
+    return n.hour > hh or (n.hour == hh and n.minute >= mm)
+
+
+def _afternoon_started() -> bool:
+    hh, mm = map(int, config.AFTERNOON_PHASE_START.split(":"))
+    n = now_kst()
+    return n.hour > hh or (n.hour == hh and n.minute >= mm)
+
+
+def _should_run_afternoon(monitor: PositionMonitor) -> bool:
+    if not config.AFTERNOON_ENABLED:
+        return False
+    if monitor.should_stop:
+        return False
+    if _past_afternoon_cutoff():
+        return False
+    daily_pnl = _get_daily_pnl_pct(monitor)
+    if daily_pnl <= config.DAILY_LOSS_LIMIT_PCT:
+        logger.info("오후 전략 스킵 — 일일 손실한도 도달 (%.1f%%)", daily_pnl)
+        return False
+    return True
+
+
 def _try_reinvest(
     kis: KISClient, bot: TelegramBot, collector: MarketDataCollector,
     analyzer: AIAnalyzer, trader: Trader, monitor: PositionMonitor,
-    sold_codes: set,
+    sold_codes: set, phase: str = "morning",
 ) -> None:
-    if _past_entry_cutoff():
+    cutoff_fn = _past_afternoon_cutoff if phase == "afternoon" else _past_entry_cutoff
+    if cutoff_fn():
         return
     try:
         remaining_cash = kis.get_available_cash()
@@ -380,8 +407,117 @@ def run_daily_cycle():
                     break
                 time.sleep(min(30, cooldown_end - time.time()))
 
+    if monitor.positions and not monitor.should_stop:
+        logger.info("오전 잔여 포지션 %d개 — 모니터링 계속", len(monitor.positions))
+        loop_exit = _run_monitoring_loop(
+            monitor, bot, kis, collector, analyzer, trader, sold_codes,
+        )
+        if loop_exit in ("market_close", "user_stop"):
+            _send_daily_report(monitor, bot, db)
+            return bot
+
+    if _should_run_afternoon(monitor):
+        if not _afternoon_started():
+            start_str = config.AFTERNOON_PHASE_START
+            bot.send_message(
+                f"☀️ 오전 전략 종료 — {start_str} 오후 전략 시작 대기\n"
+                f"(포지션↓ 사이즈↓ 보수적 운영)"
+            )
+            wait_until(config.AFTERNOON_PHASE_START, bot, kis, monitor)
+
+        if not monitor.should_stop and not _past_afternoon_cutoff():
+            _run_afternoon_phase(
+                kis, bot, db, collector, analyzer, trader, monitor,
+                sold_codes, consecutive_losses,
+            )
+
     _send_daily_report(monitor, bot, db)
     return bot
+
+
+def _run_afternoon_phase(
+    kis: KISClient, bot: TelegramBot, db: Database,
+    collector: MarketDataCollector, analyzer: AIAnalyzer,
+    trader: Trader, monitor: PositionMonitor,
+    sold_codes: set, consecutive_losses: int,
+):
+    logger.info("━━━ 오후 전략 시작 (%s ~ %s) ━━━",
+                config.AFTERNOON_PHASE_START, config.AFTERNOON_PHASE_END)
+    bot.send_message(
+        f"🌙 <b>오후 전략 시작</b>\n"
+        f"시간: {config.AFTERNOON_PHASE_START} ~ {config.AFTERNOON_PHASE_END}\n"
+        f"포지션: {config.AFTERNOON_MAX_POSITION_PCT}% | "
+        f"보유: {config.AFTERNOON_MAX_HOLD_MINUTES}분 | "
+        f"사이클: 최대 {config.AFTERNOON_MAX_CYCLES}회"
+    )
+
+    cycle = 0
+    while not _past_afternoon_cutoff() and cycle < config.AFTERNOON_MAX_CYCLES:
+        cycle += 1
+        logger.info("━━━ 오후 사이클 %d/%d 시작 ━━━", cycle, config.AFTERNOON_MAX_CYCLES)
+
+        daily_pnl = _get_daily_pnl_pct(monitor)
+        if daily_pnl <= config.DAILY_LOSS_LIMIT_PCT:
+            logger.info("일일 손실한도 도달 (%.1f%%) — 오후 사이클 중단", daily_pnl)
+            bot.send_message(f"🛑 일일 손실한도 도달 ({daily_pnl:.1f}%) — 오후 매매 중단")
+            break
+        if daily_pnl >= config.DAILY_PROFIT_TARGET_PCT:
+            logger.info("일일 수익목표 달성 (%.1f%%) — 오후 사이클 중단", daily_pnl)
+            bot.send_message(f"🎯 일일 수익목표 달성 ({daily_pnl:.1f}%) — 오후 매매 중단")
+            break
+        if consecutive_losses >= config.MAX_CONSECUTIVE_LOSSES:
+            logger.info("%d연패 — 오후 매매 중단", consecutive_losses)
+            bot.send_message(f"🛑 {consecutive_losses}연패 — 오후 매매 중단")
+            break
+
+        trades_before = len(monitor.trades_today)
+        exit_reason = _run_one_cycle(
+            cycle, kis, bot, db, collector, analyzer, trader, monitor, sold_codes,
+            consecutive_losses=consecutive_losses,
+            phase="afternoon",
+        )
+        for t in monitor.trades_today[trades_before:]:
+            if "code" in t and t.get("pnl_amt", 0) < 0:
+                sold_codes.add(t["code"])
+
+        new_trades = monitor.trades_today[trades_before:]
+        if new_trades:
+            last_pnl = new_trades[-1].get("pnl_amt", 0)
+            if last_pnl < 0:
+                consecutive_losses += 1
+            else:
+                consecutive_losses = 0
+
+        retryable = ("no_picks", "opening_filtered", "low_confidence", "positions_cleared")
+        if exit_reason not in retryable:
+            logger.info("오후 사이클 종료 (사유: %s) — 재시도 불가", exit_reason)
+            break
+
+        if monitor.should_stop:
+            break
+
+        if not _past_afternoon_cutoff() and cycle < config.AFTERNOON_MAX_CYCLES:
+            cooldown = config.AFTERNOON_CYCLE_COOLDOWN
+            if exit_reason in ("no_picks", "opening_filtered", "low_confidence"):
+                cooldown = min(cooldown, 600)
+                bot.send_message(
+                    f"⏸ 오후 사이클 {cycle} — 진입 조건 미충족 ({exit_reason})\n"
+                    f"{cooldown // 60}분 후 시장 재분석합니다."
+                )
+            else:
+                bot.send_message(f"⏸ 오후 사이클 {cycle} 완료 — {cooldown // 60}분 쿨다운")
+            logger.info("오후 쿨다운 %d초 (사유: %s)", cooldown, exit_reason)
+            cooldown_end = time.time() + cooldown
+            while time.time() < cooldown_end:
+                try:
+                    bot.process_updates(kis, monitor)
+                except Exception:
+                    pass
+                if monitor.should_stop or _past_afternoon_cutoff():
+                    break
+                time.sleep(min(30, cooldown_end - time.time()))
+
+    logger.info("━━━ 오후 전략 종료 ━━━")
 
 
 def _run_one_cycle(
@@ -391,6 +527,7 @@ def _run_one_cycle(
     trader: Trader, monitor: PositionMonitor,
     sold_codes: set,
     consecutive_losses: int = 0,
+    phase: str = "morning",
 ) -> str:
     logger.info("Phase 1 — 시장 데이터 수집")
     try:
@@ -400,12 +537,14 @@ def _run_one_cycle(
         bot.send_message(f"시장 데이터 수집 실패: {e}")
         return "error"
 
-    logger.info("Phase 2 — 종목 심층 데이터 수집")
+    phase_label = "오후" if phase == "afternoon" else "오전"
+    logger.info("Phase 2 — 종목 심층 데이터 수집 (%s)", phase_label)
     try:
         enriched = collector.enrich_stocks(
             market_data["volume_ranking"],
             market_data["stock_news"],
             market_data["is_market_open"],
+            phase=phase,
         )
     except Exception as e:
         logger.error("종목 데이터 enrichment 실패: %s", e)
@@ -454,13 +593,27 @@ def _run_one_cycle(
     bot.send_analysis_result(analysis, available_cash)
 
     recommendation = analysis.get("marketAssessment", {}).get("recommendation", "")
+    veto = analysis.get("vetoResult", {})
     picks = analysis.get("picks", [])
+
+    enriched_score_map = {s.get("mksc_shrn_iscd", ""): s.get("score", 0) for s in enriched}
+    for pick in picks:
+        if "score" not in pick:
+            pick["score"] = enriched_score_map.get(pick.get("symbol", ""), 0)
+
+    if veto and not veto.get("approved", True):
+        veto_reason = veto.get("reason", "사유 없음")
+        logger.info("AI veto 거부: %s", veto_reason)
+        bot.send_message(f"🚫 AI Veto 거부: {veto_reason}")
+        if monitor.positions:
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+        return "no_picks"
 
     if recommendation == "매매비추천" or not picks:
         logger.info("매매 비추천 — 매수 없이 대기")
         bot.send_message("📊 매매 비추천 — 시장 조건 재확인 후 재시도합니다.")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
         return "no_picks"
 
     # 손절 후 다음 사이클: AI 신뢰도 기준 강화
@@ -478,7 +631,7 @@ def _run_one_cycle(
             if not picks:
                 bot.send_message("신뢰도 기준 미달 — 이번 사이클 매수 스킵")
                 if monitor.positions:
-                    return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
+                    return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
                 return "low_confidence"
 
     # ── Phase 5 — 오프닝 검증 (실시간 안전 필터) ──
@@ -538,7 +691,7 @@ def _run_one_cycle(
     if not validated_picks:
         bot.send_message("📊 오프닝 검증 결과: 모든 후보 탈락 — 매수 없이 모니터링")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
         return "opening_filtered"
 
     passed_names = ", ".join(p["name"] for p in validated_picks)
@@ -549,11 +702,11 @@ def _run_one_cycle(
 
     # ── Phase 7 — 매수 주문 실행 ──
     logger.info("Phase 7 — 매수 주문 실행")
-    orders = trader.calculate_orders(validated_picks, available_cash, sold_codes)
+    orders = trader.calculate_orders(validated_picks, available_cash, sold_codes, phase=phase)
     if not orders:
         bot.send_message("주문 가능한 종목이 없습니다.")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
         return "no_orders"
     bot.send_buy_orders(orders)
     results = trader.execute_buy_orders(orders)
@@ -565,7 +718,7 @@ def _run_one_cycle(
     if not success_orders:
         bot.send_message("모든 매수 주문 실패.")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
         return "all_failed"
     order_map = {o["stock_code"]: o for o in success_orders}
 
@@ -593,8 +746,10 @@ def _run_one_cycle(
             if matching_order:
                 fill_price = f["price"]
                 order_price = matching_order["price"]
+                buy_slippage_pct = 0.0
                 if fill_price > 0 and order_price > 0:
-                    fill_dev = abs(fill_price - order_price) / order_price * 100
+                    buy_slippage_pct = (fill_price - order_price) / order_price * 100
+                    fill_dev = abs(buy_slippage_pct)
                     if fill_dev > config.MAX_ENTRY_DEVIATION_PCT:
                         sign = "↑" if fill_price > order_price else "↓"
                         msg = (
@@ -605,6 +760,8 @@ def _run_one_cycle(
                         bot.send_message(msg)
                         logger.warning("%s 체결가 괴리 %.1f%% (주문 %s → 체결 %s)",
                                        f["name"], fill_dev, f"{order_price:,}", f"{fill_price:,}")
+                    logger.info("%s 슬리피지: %+.3f%% (주문 %s → 체결 %s)",
+                                f["name"], buy_slippage_pct, f"{order_price:,}", f"{fill_price:,}")
                 try:
                     fresh = kis.get_current_price(f["stock_code"])
                     fresh_price = fresh["price"]
@@ -633,6 +790,9 @@ def _run_one_cycle(
                     target2=matching_order["target2"],
                     stop_loss=adjusted_stop,
                     sell_strategy=matching_order.get("sell_strategy"),
+                    buy_slippage_pct=buy_slippage_pct,
+                    score=matching_order.get("score", 0),
+                    phase=phase,
                 )
 
     pending = []
@@ -691,15 +851,16 @@ def _run_one_cycle(
     elif not fills:
         bot.send_message("⚠️ 체결 확인 불가 — /balance 명령어로 수동 확인해주세요.")
 
-    _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes)
+    _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes, phase=phase)
 
     logger.info("Phase 9 — 모니터링 시작")
-    return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
+    return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
 
 
 def _run_monitoring_loop(
     monitor: PositionMonitor, bot: TelegramBot, kis: KISClient,
     collector=None, analyzer=None, trader=None, sold_codes=None,
+    phase: str = "morning",
 ) -> str:
     logger.info("모니터링 루프 시작 — 포지션 %d개", len(monitor.positions))
     bot.send_message(f"🔍 모니터링 시작 — {len(monitor.positions)}개 포지션")
@@ -742,10 +903,11 @@ def _run_monitoring_loop(
             manual = bot._reinvest_requested
             if manual:
                 bot._reinvest_requested = False
+            cutoff_fn = _past_afternoon_cutoff if phase == "afternoon" else _past_entry_cutoff
             if manual or (time.time() - last_reinvest >= config.REINVEST_CHECK_INTERVAL
-                          and not _past_entry_cutoff()):
+                          and not cutoff_fn()):
                 last_reinvest = time.time()
-                _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes or set())
+                _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes or set(), phase=phase)
 
         time.sleep(config.CHECK_INTERVAL)
 
