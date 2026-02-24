@@ -8,6 +8,7 @@ import pytz
 import config
 from kis_client import KISClient
 from naver_data import NaverFinanceService, NaverNewsService
+from stock_scorer import score_stocks
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ class MarketDataCollector:
             "is_market_open": is_open,
         }
 
-    def enrich_stocks(self, volume_ranking: list[dict], stock_news: dict, is_market_open: bool) -> list[dict]:
+    def enrich_stocks(self, volume_ranking: list[dict], stock_news: dict, is_market_open: bool, phase: str = "morning") -> list[dict]:
         top10 = volume_ranking[:10]
         enriched = []
 
@@ -135,16 +136,32 @@ class MarketDataCollector:
                     results[idx] = top10[idx]
 
         all_enriched = [r for r in results if r is not None]
-        filtered = self._apply_hard_filters(all_enriched, is_market_open)
+        filtered = self._apply_hard_filters(all_enriched, is_market_open, phase)
         if filtered:
             logger.info("하드 필터 통과: %d/%d 종목", len(filtered), len(all_enriched))
-            return filtered
+            scored = score_stocks(filtered, is_market_open)
+            for s in scored[:3]:
+                detail = s.get("score_detail", {})
+                logger.info(
+                    "스코어: %s — %s",
+                    s.get("hts_kor_isnm", "?"),
+                    detail.get("breakdown", f"총점 {s.get('score', 0)}"),
+                )
+            return scored
         logger.warning("하드 필터 통과 종목 0개 — 전체 %d종목 AI에게 전달", len(all_enriched))
-        return all_enriched
+        scored_all = score_stocks(all_enriched, is_market_open)
+        return scored_all
 
     @staticmethod
-    def _apply_hard_filters(stocks: list[dict], is_market_open: bool) -> list[dict]:
+    def _apply_hard_filters(stocks: list[dict], is_market_open: bool, phase: str = "morning") -> list[dict]:
         passed = []
+        if phase == "afternoon":
+            change_min = config.AFTERNOON_HARD_FILTER_CHANGE_MIN
+            change_max = config.AFTERNOON_HARD_FILTER_CHANGE_MAX
+        else:
+            change_min = 1.0
+            change_max = 4.0
+
         for s in stocks:
             name = s.get("hts_kor_isnm", "?")
             change_pct = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
@@ -153,8 +170,9 @@ class MarketDataCollector:
                 logger.info("필터 제외 [+10%%↑ 급등]: %s (%.1f%%)", name, change_pct)
                 continue
 
-            if is_market_open and not (1.0 <= change_pct <= 4.0):
-                logger.info("필터 제외 [등락률 1~4%% 미충족]: %s (%.1f%%)", name, change_pct)
+            if is_market_open and not (change_min <= change_pct <= change_max):
+                logger.info("필터 제외 [등락률 %.1f~%.1f%% 미충족]: %s (%.1f%%)",
+                            change_min, change_max, name, change_pct)
                 continue
 
             raw_tv = str(s.get("acml_tr_pbmn", "0")).replace(",", "")
