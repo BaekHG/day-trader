@@ -181,6 +181,20 @@ class MarketDataCollector:
                     logger.info("필터 제외 [외국인 2일 연속매수 미충족]: %s (%d일)", name, consec_buy)
                     continue
 
+            # 5분봉 거래량 감소 추세 필터 (장중만)
+            if is_market_open:
+                m_candles = s.get("minute_candles_5m", [])
+                if len(m_candles) >= 2:
+                    vols = []
+                    for mc in m_candles[:4]:
+                        v = int(str(mc.get("volume", "0")).replace(",", "") or "0")
+                        vols.append(v)
+                    if len(vols) >= 2 and vols[0] > 0:
+                        # 최근 봉 거래량이 첫 봉의 30% 미만이면 모멘텀 소멸
+                        if vols[0] < vols[-1] * 0.3:
+                            logger.info("필터 제외 [5분봉 거래량 급감]: %s (최근 %s → %s)", name, f"{vols[0]:,}", f"{vols[-1]:,}")
+                            continue
+
             passed.append(s)
         return passed
 
