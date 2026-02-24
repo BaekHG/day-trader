@@ -17,8 +17,8 @@ KIS_CANO = "68647475"       # KIS API splits account: first 8 digits
 KIS_ACNT_PRDT_CD = "01"     # KIS API splits account: last 2 digits
 KIS_BASE_URL = "https://openapi.koreainvestment.com:9443"
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8450232682:AAH_xAmcPG8uoOdcnEH-nD5zbaFcxJg-Ph4")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "6250731705")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 TRAILING_STOP_PCT = float(os.getenv("TRAILING_STOP_PCT", "2.0"))  # % drop from high (legacy, replaced by TRAILING_STOP_LEVELS)
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "10"))  # seconds

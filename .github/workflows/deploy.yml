@@ -37,6 +37,15 @@ jobs:
             monitor/requirements.txt \
             harry@ai-shorts-server:/home/harry/day-trader/
 
+      - name: Inject secrets into .env
+        run: |
+          gcloud compute ssh harry@ai-shorts-server --zone=asia-northeast3-a --command="
+            cd /home/harry/day-trader &&
+            touch .env &&
+            grep -q TELEGRAM_BOT_TOKEN .env && sed -i 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}/' .env || echo 'TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}' >> .env &&
+            grep -q TELEGRAM_CHAT_ID .env && sed -i 's/^TELEGRAM_CHAT_ID=.*/TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}/' .env || echo 'TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}' >> .env
+          "
+
       - name: Install dependencies & verify
         run: |
           gcloud compute ssh harry@ai-shorts-server --zone=asia-northeast3-a --command="
