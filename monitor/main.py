@@ -349,16 +349,28 @@ def run_daily_cycle():
             else:
                 consecutive_losses = 0
 
-        if exit_reason != "positions_cleared":
+        # 재시도 가능한 결과: 쿨다운 후 다음 사이클
+        retryable = ("no_picks", "opening_filtered", "low_confidence", "positions_cleared")
+        if exit_reason not in retryable:
+            logger.info("사이클 종료 (사유: %s) — 재시도 불가", exit_reason)
             break
 
         if monitor.should_stop:
             break
 
         if not _past_entry_cutoff() and cycle < config.MAX_CYCLES:
-            logger.info("쿨다운 %d초 시작", config.CYCLE_COOLDOWN)
-            bot.send_message(f"⏸ 사이클 {cycle} 완료 — {config.CYCLE_COOLDOWN // 60}분 쿨다운")
-            cooldown_end = time.time() + config.CYCLE_COOLDOWN
+            cooldown = config.CYCLE_COOLDOWN
+            # 매매비추천/필터탈락은 쿨다운 짧게 (시장 변화 빠르게 재확인)
+            if exit_reason in ("no_picks", "opening_filtered", "low_confidence"):
+                cooldown = min(cooldown, 600)  # 최대 10분
+                bot.send_message(
+                    f"⏸ 사이클 {cycle} — 진입 조건 미충족 ({exit_reason})\n"
+                    f"{cooldown // 60}분 후 시장 재분석합니다."
+                )
+            else:
+                bot.send_message(f"⏸ 사이클 {cycle} 완료 — {cooldown // 60}분 쿨다운")
+            logger.info("쿨다운 %d초 시작 (사유: %s)", cooldown, exit_reason)
+            cooldown_end = time.time() + cooldown
             while time.time() < cooldown_end:
                 try:
                     bot.process_updates(kis, monitor)
@@ -445,8 +457,8 @@ def _run_one_cycle(
     picks = analysis.get("picks", [])
 
     if recommendation == "매매비추천" or not picks:
-        logger.info("매매 비추천 — 매수 없이 모니터링 모드")
-        bot.send_message("매매 비추천 — 기존 포지션만 모니터링합니다.")
+        logger.info("매매 비추천 — 매수 없이 대기")
+        bot.send_message("📊 매매 비추천 — 시장 조건 재확인 후 재시도합니다.")
         if monitor.positions:
             return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "no_picks"
