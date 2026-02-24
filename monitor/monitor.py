@@ -81,37 +81,20 @@ class PositionMonitor:
                 self._execute_sell(code, pos, remaining, current, f"{config.FORCE_CLOSE_TIME} 강제 청산", pnl_pct)
                 continue
 
-            # 진입 직후 손절 유예 체크
-            entry_time_val = pos.get("entry_time", "")
-            in_grace = False
-            if entry_time_val:
-                try:
-                    et = datetime.fromisoformat(entry_time_val)
-                    secs_since = (now - et).total_seconds()
-                    if secs_since < config.STOP_LOSS_GRACE_MINUTES * 60:
-                        in_grace = True
-                        logger.info(
-                            "%s | 진입 후 %.0f초 — 손절 유예 중 (%d분 유예)",
-                            pos["name"], secs_since, config.STOP_LOSS_GRACE_MINUTES,
-                        )
-                except (ValueError, TypeError):
-                    pass
-
-            if not in_grace:
-                effective_stop = pos["stop_loss"]
-                high_pnl = (pos["high_since_entry"] - entry) / entry * 100 if entry else 0
-                for level_pnl, stop_pnl in config.TRAILING_STOP_LEVELS:
-                    if high_pnl >= level_pnl:
-                        trailing_stop = int(entry * (1 + stop_pnl / 100))
-                        effective_stop = max(effective_stop, trailing_stop)
-                        break
-                if current <= effective_stop:
-                    if effective_stop > pos["stop_loss"]:
-                        reason = f"트레일링 스탑 (고점 +{high_pnl:.1f}% → 손절선 +{((effective_stop - entry) / entry * 100):.1f}%)"
-                    else:
-                        reason = "손절"
-                    self._execute_sell(code, pos, remaining, current, reason, pnl_pct)
-                    continue
+            effective_stop = pos["stop_loss"]
+            high_pnl = (pos["high_since_entry"] - entry) / entry * 100 if entry else 0
+            for level_pnl, stop_pnl in config.TRAILING_STOP_LEVELS:
+                if high_pnl >= level_pnl:
+                    trailing_stop = int(entry * (1 + stop_pnl / 100))
+                    effective_stop = max(effective_stop, trailing_stop)
+                    break
+            if current <= effective_stop:
+                if effective_stop > pos["stop_loss"]:
+                    reason = f"트레일링 스탑 (고점 +{high_pnl:.1f}% → 손절선 +{((effective_stop - entry) / entry * 100):.1f}%)"
+                else:
+                    reason = "손절"
+                self._execute_sell(code, pos, remaining, current, reason, pnl_pct)
+                continue
 
             pos_phase = pos.get("phase", "morning")
             max_hold = config.AFTERNOON_MAX_HOLD_MINUTES if pos_phase == "afternoon" else config.MAX_HOLD_MINUTES
