@@ -148,9 +148,8 @@ class MarketDataCollector:
                     detail.get("breakdown", f"총점 {s.get('score', 0)}"),
                 )
             return scored
-        logger.warning("하드 필터 통과 종목 0개 — 전체 %d종목 AI에게 전달", len(all_enriched))
-        scored_all = score_stocks(all_enriched, is_market_open)
-        return scored_all
+        logger.warning("하드 필터 통과 종목 0개 — 이번 사이클 매매 비추천 (빈 리스트 반환)")
+        return []
 
     @staticmethod
     def _apply_hard_filters(stocks: list[dict], is_market_open: bool, phase: str = "morning") -> list[dict]:

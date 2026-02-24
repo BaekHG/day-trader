@@ -183,7 +183,11 @@ def _try_reinvest(
         mdata = collector.fetch_market_data()
         enr = collector.enrich_stocks(
             mdata["volume_ranking"], mdata["stock_news"], mdata["is_market_open"],
+            phase=phase,
         )
+        if not enr:
+            bot.send_message("📊 하드 필터 통과 종목 없음 — 재투자 건너뜀")
+            return
         reinvest_pos = [
             {"name": p["name"], "code": c, "remaining_qty": p["remaining_qty"]}
             for c, p in monitor.positions.items()
@@ -552,6 +556,13 @@ def _run_one_cycle(
         return "error"
 
     logger.info("enriched %d 종목", len(enriched))
+
+    if not enriched:
+        logger.info("하드 필터 통과 종목 0개 — 이번 사이클 매매 비추천")
+        bot.send_message("📊 하드 필터 통과 종목 없음 — 시장 조건 재확인 후 재시도합니다.")
+        if monitor.positions:
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+        return "no_picks"
 
     logger.info("Phase 3 — AI 분석 중")
     try:
