@@ -31,6 +31,9 @@ jobs:
             monitor/monitor.py \
             monitor/telegram_bot.py \
             monitor/main.py \
+            monitor/db.py \
+            monitor/stock_scorer.py \
+            monitor/backtester.py \
             monitor/requirements.txt \
             harry@ai-shorts-server:/home/harry/day-trader/
 
@@ -42,7 +45,7 @@ jobs:
             source venv/bin/activate &&
             pip install -q -r requirements.txt &&
             sudo systemctl restart day-trader.service &&
-            sleep 3 &&
+            sleep 8 &&
             sudo systemctl is-active day-trader.service &&
             python3 -c 'from telegram_bot import TelegramBot; TelegramBot().send_message(\"Deploy + Restart complete\")' &&
             echo 'Deploy OK'
