@@ -17,14 +17,16 @@ class Trader:
 
     def calculate_orders(
         self, picks: list[dict], total_capital: int, sold_codes: set | None = None,
+        phase: str = "morning",
     ) -> list[dict]:
         sold_codes = sold_codes or set()
+        max_pos_pct = config.AFTERNOON_MAX_POSITION_PCT if phase == "afternoon" else config.MAX_POSITION_PCT
         orders = []
         for pick in picks[:config.MAX_PICKS]:
             if pick["symbol"] in sold_codes:
                 logger.info("손실종목 재진입 차단: %s (%s)", pick["name"], pick["symbol"])
                 continue
-            alloc = min(pick.get("allocation", 0), config.MAX_POSITION_PCT)
+            alloc = min(pick.get("allocation", 0), max_pos_pct)
             if alloc <= 0:
                 continue
             allocated = total_capital * alloc / 100
@@ -52,8 +54,9 @@ class Trader:
                 "stop_loss": pick.get("stopLoss", 0),
                 "sell_strategy": pick.get("sellStrategy", {}),
                 "reason": reason_str,
+                "score": pick.get("score", 0),
             })
-        max_alloc = config.MAX_POSITION_PCT * config.MAX_PICKS
+        max_alloc = max_pos_pct * config.MAX_PICKS
         total_alloc = sum(o["allocation"] for o in orders)
         if total_alloc > max_alloc:
             logger.warning("배분 합계 %d%% > %d%% — 비례 축소", total_alloc, max_alloc)

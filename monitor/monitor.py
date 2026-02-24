@@ -30,6 +30,7 @@ class PositionMonitor:
     def add_position(
         self, stock_code: str, name: str, quantity: int, entry_price: int,
         target1: int, target2: int, stop_loss: int, sell_strategy: dict | None = None,
+        buy_slippage_pct: float = 0.0, score: int = 0, phase: str = "morning",
     ):
         self.positions[stock_code] = {
             "name": name, "quantity": quantity, "remaining_qty": quantity,
@@ -37,6 +38,9 @@ class PositionMonitor:
             "stop_loss": stop_loss, "high_since_entry": entry_price,
             "target1_hit": False, "sell_strategy": sell_strategy or {},
             "entry_time": datetime.now(KST).isoformat(),
+            "buy_slippage_pct": round(buy_slippage_pct, 3),
+            "score": score,
+            "phase": phase,
         }
         self._save_positions()
         logger.info("포지션 추가: %s %d주 @ %s원", name, quantity, f"{entry_price:,}")
@@ -109,14 +113,17 @@ class PositionMonitor:
                     self._execute_sell(code, pos, remaining, current, reason, pnl_pct)
                     continue
 
+            pos_phase = pos.get("phase", "morning")
+            max_hold = config.AFTERNOON_MAX_HOLD_MINUTES if pos_phase == "afternoon" else config.MAX_HOLD_MINUTES
+
             entry_time_str = pos.get("entry_time", "")
             if entry_time_str:
                 entry_dt = datetime.fromisoformat(entry_time_str)
                 hold_minutes = (now - entry_dt).total_seconds() / 60
-                if hold_minutes >= config.MAX_HOLD_MINUTES and abs(pnl_pct) < 1.0:
+                if hold_minutes >= max_hold and abs(pnl_pct) < 1.0:
                     self._execute_sell(
                         code, pos, remaining, current,
-                        f"{config.MAX_HOLD_MINUTES}분 횡보 — 전량 매도", pnl_pct,
+                        f"{max_hold}분 횡보 — 전량 매도", pnl_pct,
                     )
                     continue
 
@@ -191,6 +198,9 @@ class PositionMonitor:
                 "pnl_amt": pnl_amt, "pnl_pct": round(pnl_pct, 1), "reason": reason,
                 "exit_type": exit_type, "hold_minutes": round(hold_minutes, 1),
                 "high_water_mark_pct": round(high_water_mark_pct, 2),
+                "buy_slippage_pct": pos.get("buy_slippage_pct", 0.0),
+                "score": pos.get("score", 0),
+                "phase": pos.get("phase", "morning"),
             })
             self._save_trades_today()
 
@@ -207,6 +217,8 @@ class PositionMonitor:
                     exit_type=exit_type,
                     hold_minutes=hold_minutes,
                     high_water_mark_pct=high_water_mark_pct,
+                    slippage_pct=pos.get("buy_slippage_pct", 0.0),
+                    score=pos.get("score", 0),
                 )
                 if not ok:
                     self.bot.send_message(f"⚠️ {name} 매도 기록 DB 저장 실패")
