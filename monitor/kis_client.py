@@ -263,6 +263,34 @@ class KISClient:
         resp = self._get(url, headers=self._headers("FHPST01700000"), params=params)
         return resp.json().get("output", []) or []
 
+    def get_fluctuation_ranking_filtered(
+        self,
+        rate_min: float = 1.0,
+        rate_max: float = 4.0,
+        price_min: int = 1000,
+        vol_min: int = 100000,
+    ) -> list[dict]:
+        url = f"{self.base_url}/uapi/domestic-stock/v1/ranking/fluctuation"
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_COND_SCR_DIV_CODE": "20170",
+            "FID_INPUT_ISCD": "0000",
+            "FID_RANK_SORT_CLS_CODE": "0",
+            "FID_INPUT_CNT_1": "0",
+            "FID_PRC_CLS_CODE": "0",
+            "FID_INPUT_PRICE_1": str(price_min),
+            "FID_INPUT_PRICE_2": "0",
+            "FID_VOL_CNT": str(vol_min),
+            "FID_TRGT_CLS_CODE": "0",
+            # 비트마스크: 투자위험/경고/주의/관리/정리매매/불성실공시/우선주/거래정지/ETF/ETN 제외
+            "FID_TRGT_EXLS_CLS_CODE": "0000000000",
+            "FID_DIV_CLS_CODE": "0",
+            "FID_RSFL_RATE1": str(rate_min),
+            "FID_RSFL_RATE2": str(rate_max),
+        }
+        resp = self._get(url, headers=self._headers("FHPST01700000"), params=params)
+        return resp.json().get("output", []) or []
+
     def get_daily_candles(self, stock_code: str) -> list[dict]:
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
         now = datetime.now(KST)

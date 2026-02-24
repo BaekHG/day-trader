@@ -180,7 +180,7 @@ def _try_reinvest(
     bot.send_message(f"💰 잔여 현금 {remaining_cash:,}원 — 추가 종목 분석")
 
     try:
-        mdata = collector.fetch_market_data()
+        mdata = collector.fetch_market_data(phase=phase)
         enr = collector.enrich_stocks(
             mdata["volume_ranking"], mdata["stock_news"], mdata["is_market_open"],
             phase=phase,
@@ -535,7 +535,7 @@ def _run_one_cycle(
 ) -> str:
     logger.info("Phase 1 — 시장 데이터 수집")
     try:
-        market_data = collector.fetch_market_data()
+        market_data = collector.fetch_market_data(phase=phase)
     except Exception as e:
         logger.error("시장 데이터 수집 실패: %s", e)
         bot.send_message(f"시장 데이터 수집 실패: {e}")

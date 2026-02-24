@@ -30,10 +30,14 @@ class MarketDataCollector:
         end = now.replace(hour=15, minute=30, second=0, microsecond=0)
         return start <= now <= end
 
-    def fetch_market_data(self) -> dict:
+    def fetch_market_data(self, phase: str = "morning") -> dict:
         is_open = self.is_market_open()
 
-        volume_ranking = self._get_volume_ranking()
+        if config.DUAL_SOURCING_ENABLED and is_open:
+            volume_ranking = self._get_dual_sourced_candidates(phase)
+        else:
+            volume_ranking = self._get_volume_ranking()
+
         up_ranking = self._get_up_ranking()
         down_ranking = self._get_down_ranking()
 
@@ -214,6 +218,84 @@ class MarketDataCollector:
 
             passed.append(s)
         return passed
+
+    def _get_dual_sourced_candidates(self, phase: str = "morning") -> list[dict]:
+        if phase == "afternoon":
+            rate_min = config.AFTERNOON_HARD_FILTER_CHANGE_MIN
+            rate_max = config.AFTERNOON_HARD_FILTER_CHANGE_MAX
+        else:
+            rate_min = 1.0
+            rate_max = 4.0
+
+        source_a = self._get_volume_ranking_with_cap_filter()
+        source_b = self._get_change_rate_ranking(rate_min, rate_max)
+
+        seen_codes = set()
+        merged = []
+        for item in source_a + source_b:
+            code = item.get("mksc_shrn_iscd", "")
+            if code and code not in seen_codes:
+                seen_codes.add(code)
+                merged.append(item)
+
+        merged.sort(
+            key=lambda x: int(str(x.get("acml_tr_pbmn", "0")).replace(",", "") or "0"),
+            reverse=True,
+        )
+
+        logger.info(
+            "듀얼 소싱 결과: 거래량소스 %d + 등락률소스 %d → 합산 %d종목 (중복제거)",
+            len(source_a), len(source_b), len(merged),
+        )
+        return merged
+
+    def _get_volume_ranking_with_cap_filter(self) -> list[dict]:
+        raw = self._get_volume_ranking()
+        if not config.DUAL_SOURCING_MIN_MARKET_CAP:
+            return raw
+
+        filtered = []
+        for item in raw:
+            cap_str = str(item.get("stck_avls_hamt", "0")).replace(",", "")
+            market_cap = int(cap_str) if cap_str.isdigit() else 0
+
+            if market_cap == 0:
+                tr_pbmn = str(item.get("acml_tr_pbmn", "0")).replace(",", "")
+                trading_value = int(tr_pbmn) if tr_pbmn.isdigit() else 0
+                if trading_value >= 50_000_000_000:
+                    filtered.append(item)
+                    continue
+                logger.info(
+                    "시총 필터 제외 (시총 없음, 거래대금 부족): %s",
+                    item.get("hts_kor_isnm", "?"),
+                )
+                continue
+
+            if market_cap >= config.DUAL_SOURCING_MIN_MARKET_CAP:
+                filtered.append(item)
+            else:
+                logger.info(
+                    "시총 필터 제외: %s (시총 %s < %s)",
+                    item.get("hts_kor_isnm", "?"),
+                    f"{market_cap:,}",
+                    f"{config.DUAL_SOURCING_MIN_MARKET_CAP:,}",
+                )
+        return filtered
+
+    def _get_change_rate_ranking(self, rate_min: float, rate_max: float) -> list[dict]:
+        try:
+            ranking = self.kis.get_fluctuation_ranking_filtered(
+                rate_min=rate_min,
+                rate_max=rate_max,
+                price_min=config.DUAL_SOURCING_MIN_PRICE,
+                vol_min=config.DUAL_SOURCING_MIN_VOLUME,
+            )
+            if ranking:
+                logger.info("등락률 범위 순위 소스: KIS (%d종목, %.1f~%.1f%%)", len(ranking), rate_min, rate_max)
+                return ranking[:20]
+        except Exception as e:
+            logger.warning("KIS 등락률 범위 순위 실패: %s", e)
+        return []
 
     def _get_volume_ranking(self) -> list[dict]:
         try:
