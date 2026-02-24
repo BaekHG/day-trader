@@ -335,6 +335,7 @@ def run_daily_cycle():
         trades_before = len(monitor.trades_today)
         exit_reason = _run_one_cycle(
             cycle, kis, bot, db, collector, analyzer, trader, monitor, sold_codes,
+            consecutive_losses=consecutive_losses,
         )
         for t in monitor.trades_today[trades_before:]:
             if "code" in t and t.get("pnl_amt", 0) < 0:
@@ -377,6 +378,7 @@ def _run_one_cycle(
     collector: MarketDataCollector, analyzer: AIAnalyzer,
     trader: Trader, monitor: PositionMonitor,
     sold_codes: set,
+    consecutive_losses: int = 0,
 ) -> str:
     logger.info("Phase 1 — 시장 데이터 수집")
     try:
@@ -449,14 +451,25 @@ def _run_one_cycle(
             return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
         return "no_picks"
 
-    bot.send_message(f"🔄 사이클 {cycle + 1} — 후보 선정 완료, 장 시작 대기")
+    # 손절 후 다음 사이클: AI 신뢰도 기준 강화
+    if consecutive_losses > 0:
+        min_conf = config.MIN_CONFIDENCE_AFTER_LOSS
+        low_conf = [p for p in picks if p.get("confidence", 0) < min_conf]
+        if low_conf:
+            names = ", ".join(p["name"] for p in low_conf)
+            logger.info("손절 후 신뢰도 미달: %s (기준 %d%%)", names, min_conf)
+            bot.send_message(
+                f"⚠️ {consecutive_losses}연패 후 안전 모드 — "
+                f"신뢰도 {min_conf}% 미만 종목 제외: {names}"
+            )
+            picks = [p for p in picks if p.get("confidence", 0) >= min_conf]
+            if not picks:
+                bot.send_message("신뢰도 기준 미달 — 이번 사이클 매수 스킵")
+                if monitor.positions:
+                    return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes)
+                return "low_confidence"
 
-    # ── Phase 5 — 장 시작 대기 + 오프닝 검증 ──
-    if not collector.is_market_open():
-        logger.info("장 시작 전 — %s까지 대기 (첫 5분봉 확인)", config.OPENING_WAIT_TIME)
-        bot.send_message(f"⏳ 장 시작 전 — {config.OPENING_WAIT_TIME} 첫 5분봉 확인 후 매수 판단합니다.")
-        wait_until(config.OPENING_WAIT_TIME, bot, kis, monitor)
-
+    # ── Phase 5 — 오프닝 검증 (실시간 안전 필터) ──
     logger.info("Phase 5 — 오프닝 검증 (실시간 데이터 확인)")
     validated_picks = []
     for pick in picks:
