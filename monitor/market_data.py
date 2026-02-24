@@ -185,22 +185,9 @@ class MarketDataCollector:
                 continue
 
             pos_from_high = s.get("position_from_high", -999)
-            if isinstance(pos_from_high, (int, float)) and pos_from_high < -5.0:
-                logger.info("필터 제외 [고점 대비 -5%% 초과 하락]: %s (%.1f%%)", name, pos_from_high)
+            if isinstance(pos_from_high, (int, float)) and pos_from_high < -10.0:
+                logger.info("필터 제외 [고점 대비 -10%% 초과 하락]: %s (%.1f%%)", name, pos_from_high)
                 continue
-
-            foreign = s.get("foreign_institution", [])
-            if foreign:
-                consec_buy = 0
-                for d in foreign[:5]:
-                    qty = int(str(d.get("frgn_ntby_qty", "0")).replace(",", "") or "0")
-                    if qty > 0:
-                        consec_buy += 1
-                    else:
-                        break
-                if consec_buy < 2:
-                    logger.info("필터 제외 [외국인 2일 연속매수 미충족]: %s (%d일)", name, consec_buy)
-                    continue
 
             # 5분봉 거래량 감소 추세 필터 (장중만)
             if is_market_open:

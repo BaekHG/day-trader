@@ -146,10 +146,12 @@ def _score_price_position(stock: dict) -> int:
         return 16
     if pos >= -3.0:
         return 12
-    if pos >= -4.0:
-        return 8
     if pos >= -5.0:
+        return 8
+    if pos >= -7.0:
         return 4
+    if pos >= -10.0:
+        return 2
     return 0
 
 
