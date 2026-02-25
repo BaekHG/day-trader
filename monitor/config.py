@@ -34,14 +34,14 @@ TRAILING_STOP_LEVELS = [
     (1.5, 1.0),   # +1.5% 찍으면 최소 +1.0% 보호 (수수료 후 순수익)
 ]
 
-# --- 멀티사이클 (오전) ---
-MAX_CYCLES = int(os.getenv("MAX_CYCLES", "5"))
-NO_NEW_ENTRY_AFTER = "10:30"   # 오전장 집중 — 이후 신규 진입 차단
+# --- 멀티사이클 ---
+MAX_CYCLES = int(os.getenv("MAX_CYCLES", "10"))
+NO_NEW_ENTRY_AFTER = "14:30"   # 14:30 이후 신규 진입 차단 (15:10 강제청산 전)
 FORCE_CLOSE_TIME = "15:10"     # 전량 강제 청산
-CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "1200"))  # 사이클 간 쿨다운 (초)
+CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "180"))  # 사이클 간 쿨다운 (초)
 
-# --- 오후 전략 (시간대별 분기) ---
-AFTERNOON_ENABLED = os.getenv("AFTERNOON_ENABLED", "true").lower() == "true"
+# --- 오후 전략 (비활성화 — 종일 모멘텀으로 통합) ---
+AFTERNOON_ENABLED = False
 AFTERNOON_PHASE_START = os.getenv("AFTERNOON_PHASE_START", "11:00")
 AFTERNOON_PHASE_END = os.getenv("AFTERNOON_PHASE_END", "14:30")
 AFTERNOON_MAX_CYCLES = int(os.getenv("AFTERNOON_MAX_CYCLES", "3"))
@@ -74,13 +74,13 @@ REINVEST_CHECK_INTERVAL = int(os.getenv("REINVEST_CHECK_INTERVAL", "300"))
 
 # --- 포지션 사이징 ---
 MAX_PICKS = int(os.getenv("MAX_PICKS", "1"))            # 최대 동시 보유 종목 수
-MAX_POSITION_PCT = int(os.getenv("MAX_POSITION_PCT", "70"))  # 종목당 자본 배분 한도 (%)
+MAX_POSITION_PCT = int(os.getenv("MAX_POSITION_PCT", "80"))  # 종목당 자본 배분 한도 (%)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 AI_PROVIDER = os.getenv("AI_PROVIDER", "anthropic")  # "anthropic" or "openai"
 TOTAL_CAPITAL = int(os.getenv("TOTAL_CAPITAL", "3000000"))
-ANALYSIS_TIME = os.getenv("ANALYSIS_TIME", "09:10")
+ANALYSIS_TIME = os.getenv("ANALYSIS_TIME", "09:02")
 BUY_CONFIRM_TIMEOUT = int(os.getenv("BUY_CONFIRM_TIMEOUT", "900"))
 
 ENRICHMENT_POOL_SIZE = int(os.getenv("ENRICHMENT_POOL_SIZE", "15"))  # 심층 분석할 후보 종목 수
@@ -110,3 +110,56 @@ TOKEN_CACHE_FILE = os.path.join(BASE_DIR, ".token_cache.json")
 TRADES_FILE = os.path.join(BASE_DIR, "trades_today.json")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 VERSION = "1.0.0"
+
+# --- 모멘텀 전략 (아이티켐형 급등주 단타) ---
+MOMENTUM_ENABLED = os.getenv("MOMENTUM_ENABLED", "true").lower() == "true"
+MOMENTUM_RATE_MIN = float(os.getenv("MOMENTUM_RATE_MIN", "5.0"))    # 소싱 최소 등락률 (%)
+MOMENTUM_RATE_MAX = float(os.getenv("MOMENTUM_RATE_MAX", "29.9"))   # 소싱 최대 (상한가 미만)
+MOMENTUM_MIN_PRICE = int(os.getenv("MOMENTUM_MIN_PRICE", "2000"))   # 동전주 제외
+MOMENTUM_MIN_VOLUME = int(os.getenv("MOMENTUM_MIN_VOLUME", "200000"))  # 최소 거래량 20만주
+MOMENTUM_PREV_DAY_MAX_CHANGE = float(os.getenv("MOMENTUM_PREV_DAY_MAX_CHANGE", "12.0"))  # 전일 +12%↑ → 연속급등 제외
+MOMENTUM_MIN_HIGH_RATIO = float(os.getenv("MOMENTUM_MIN_HIGH_RATIO", "0.93"))  # 고점 대비 93% 이상 유지
+MOMENTUM_VOL_SUSTAIN_RATIO = float(os.getenv("MOMENTUM_VOL_SUSTAIN_RATIO", "0.7"))  # 최근봉 거래량 ≥ 직전봉 × 0.7
+MOMENTUM_ENTRY_START = os.getenv("MOMENTUM_ENTRY_START", "09:02")   # 모멘텀 진입 시작
+MOMENTUM_ENTRY_END = os.getenv("MOMENTUM_ENTRY_END", "14:30")       # 모멘텀 진입 종료
+MOMENTUM_STOP_LOSS_PCT = float(os.getenv("MOMENTUM_STOP_LOSS_PCT", "2.5"))  # 모멘텀 손절 기본값
+MOMENTUM_MIN_SCORE = int(os.getenv("MOMENTUM_MIN_SCORE", "60"))
+MOMENTUM_STOP_LOSS_BY_SCORE = [
+    (80, 3.5),   # 스코어 80+ → -3.5% (확신 높음, 버틴다)
+    (60, 2.5),   # 스코어 60~79 → -2.5% (기본)
+]
+MOMENTUM_TIME_STOP_MINUTES = int(os.getenv("MOMENTUM_TIME_STOP_MINUTES", "20"))  # 20분 횡보 시 청산
+MOMENTUM_TIME_STOP_MIN_PROFIT = float(os.getenv("MOMENTUM_TIME_STOP_MIN_PROFIT", "0.5"))  # 20분 후 +0.5% 미만이면 청산
+MOMENTUM_DAILY_MAX_LOSSES = int(os.getenv("MOMENTUM_DAILY_MAX_LOSSES", "2"))  # 하루 모멘텀 손절 2회 → 당일 중단
+MOMENTUM_OPTIMAL_CHANGE_MIN = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MIN", "8.0"))  # 스코어링: 최적 등락률 하한
+MOMENTUM_OPTIMAL_CHANGE_MAX = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MAX", "15.0"))  # 스코어링: 최적 등락률 상한
+
+# 모멘텀 트레일링 스톱 (일반보다 넓음 — 모멘텀주 정상 변동폭 수용)
+MOMENTUM_TRAILING_STOP_LEVELS = [
+    (10.0, 7.5),   # +10% 도달 → +7.5% 확보 (2.5% 숨 여유)
+    (7.0, 5.0),    # +7%  도달 → +5.0% 확보 (2.0% 여유)
+    (5.0, 3.0),    # +5%  도달 → +3.0% 확보 (2.0% 여유)
+    (3.0, 1.5),    # +3%  도달 → +1.5% 확보 (1.5% 여유)
+    (1.5, 0.3),    # +1.5% 도달 → +0.3% 확보 (수수료 커버)
+]
+
+# --- 후반 시간대 (10:30 이후) 보수적 파라미터 ---
+LATE_SESSION_START = "10:30"
+LATE_SESSION_POSITION_PCT = 40
+LATE_SESSION_MIN_SCORE = 75
+LATE_SESSION_STOP_LOSS_PCT = 2.0
+LATE_SESSION_REQUIRE_PROFIT = True   # 오전 수익 중일 때만 진입
+
+MARKET_INDEX_BLOCK_PCT = -1.0   # KOSDAQ 이 값 이하 시 모멘텀 진입 차단
+
+# --- 거래대금 필터 (가격대별 차등) ---
+# 저가주는 거래대금 기준을 낮춰 아이티켐(1~2만원대) 같은 중소형 급등주도 포착
+MIN_TRADING_VALUE_TIERS = [
+    (50000, 5_000_000_000),   # 5만원 이상: 50억
+    (20000, 3_000_000_000),   # 2~5만원: 30억
+    (0,     1_000_000_000),   # 2만원 이하: 10억
+]
+
+# --- Dry-run 모의투자 모드 ---
+# --dry-run 플래그로 활성화: 전체 파이프라인 실행하되 실제 주문 없이 시뮬레이션
+DRY_RUN = False
