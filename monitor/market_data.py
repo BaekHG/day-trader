@@ -59,7 +59,8 @@ class MarketDataCollector:
         }
 
     def enrich_stocks(self, volume_ranking: list[dict], stock_news: dict, is_market_open: bool, phase: str = "morning") -> list[dict]:
-        top10 = volume_ranking[:10]
+        pool_size = config.ENRICHMENT_POOL_SIZE
+        top10 = volume_ranking[:pool_size]
         enriched = []
 
         def _enrich_one(item: dict) -> dict:
@@ -162,8 +163,8 @@ class MarketDataCollector:
             change_min = config.AFTERNOON_HARD_FILTER_CHANGE_MIN
             change_max = config.AFTERNOON_HARD_FILTER_CHANGE_MAX
         else:
-            change_min = 1.0
-            change_max = 4.0
+            change_min = 0.5
+            change_max = 6.0
 
         for s in stocks:
             name = s.get("hts_kor_isnm", "?")
@@ -180,8 +181,8 @@ class MarketDataCollector:
 
             raw_tv = str(s.get("acml_tr_pbmn", "0")).replace(",", "")
             trading_value = int(raw_tv) if raw_tv.isdigit() else 0
-            if trading_value > 0 and trading_value < 10_000_000_000:
-                logger.info("필터 제외 [거래대금 100억 미만]: %s (%s)", name, f"{trading_value:,}")
+            if trading_value > 0 and trading_value < 5_000_000_000:
+                logger.info("필터 제외 [거래대금 50억 미만]: %s (%s)", name, f"{trading_value:,}")
                 continue
 
             pos_from_high = s.get("position_from_high", -999)
@@ -211,15 +212,16 @@ class MarketDataCollector:
             rate_min = config.AFTERNOON_HARD_FILTER_CHANGE_MIN
             rate_max = config.AFTERNOON_HARD_FILTER_CHANGE_MAX
         else:
-            rate_min = 1.0
-            rate_max = 4.0
+            rate_min = 0.5
+            rate_max = 6.0
 
         source_a = self._get_volume_ranking_with_cap_filter()
         source_b = self._get_change_rate_ranking(rate_min, rate_max)
+        source_c = self._get_breakout_candidates()
 
         seen_codes = set()
         merged = []
-        for item in source_a + source_b:
+        for item in source_a + source_b + source_c:
             code = item.get("mksc_shrn_iscd", "")
             if code and code not in seen_codes:
                 seen_codes.add(code)
@@ -231,10 +233,30 @@ class MarketDataCollector:
         )
 
         logger.info(
-            "듀얼 소싱 결과: 거래량소스 %d + 등락률소스 %d → 합산 %d종목 (중복제거)",
-            len(source_a), len(source_b), len(merged),
+            "3중 소싱 결과: 거래량 %d + 등락률 %d + 돌파 %d → 합산 %d종목 (중복제거)",
+            len(source_a), len(source_b), len(source_c), len(merged),
         )
         return merged
+
+    def _get_breakout_candidates(self) -> list[dict]:
+        """상승 상위 종목에서 돌파 후보 추출 — 아이티켐 같은 초기 상승 종목 포착."""
+        try:
+            ranking = self.kis.get_fluctuation_ranking(is_up=True)
+            if not ranking:
+                return []
+            filtered = []
+            for item in ranking[:30]:
+                price = int(str(item.get("stck_prpr", "0")).replace(",", "") or "0")
+                vol = int(str(item.get("acml_vol", "0")).replace(",", "") or "0")
+                change = float(str(item.get("prdy_ctrt", "0")).replace(",", "") or "0")
+                # 기본 필터: 1000원 이상, 거래량 5만 이상, +10% 미만 (상한가 제외)
+                if price >= config.DUAL_SOURCING_MIN_PRICE and vol >= 50000 and change < 10.0:
+                    filtered.append(item)
+            logger.info("돌파 후보 소스: KIS 상승순위 (%d종목)", len(filtered))
+            return filtered[:20]
+        except Exception as e:
+            logger.warning("KIS 상승순위 조회 실패: %s", e)
+        return []
 
     def _get_volume_ranking_with_cap_filter(self) -> list[dict]:
         raw = self._get_volume_ranking()
@@ -327,7 +349,7 @@ class MarketDataCollector:
     def _collect_news(self, volume_ranking: list[dict]) -> dict:
         news = {}
         targets = []
-        for item in volume_ranking[:10]:
+        for item in volume_ranking[:config.ENRICHMENT_POOL_SIZE]:
             name = item.get("hts_kor_isnm", "")
             code = item.get("mksc_shrn_iscd", "")
             if name and code:
