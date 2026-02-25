@@ -30,6 +30,8 @@ class TelegramBot:
     def send_message(self, text: str) -> bool:
         if not self.token or not self.chat_id:
             return False
+        if config.DRY_RUN and not text.startswith("[모의]"):
+            text = f"[모의] {text}"
         try:
             for chunk in self._split(text, 4000):
                 resp = requests.post(
@@ -259,14 +261,17 @@ class TelegramBot:
                     if code in monitor.positions:
                         pos = monitor.positions[code]
                         qty = pos["remaining_qty"]
-                        try:
-                            result = kis_client.place_sell_order(code, qty)
-                            if result.get("rt_cd") == "0":
-                                self.send_message(f"✅ {pos['name']} {qty}주 시장가 매도 주문 완료")
-                            else:
-                                self.send_message(f"⚠️ 매도 실패: {result.get('msg1', '알 수 없음')}")
-                        except Exception as e:
-                            self.send_message(f"매도 오류: {e}")
+                        if config.DRY_RUN:
+                            self.send_message(f"✅ {pos['name']} {qty}주 시장가 매도 (모의)")
+                        else:
+                            try:
+                                result = kis_client.place_sell_order(code, qty)
+                                if result.get("rt_cd") == "0":
+                                    self.send_message(f"✅ {pos['name']} {qty}주 시장가 매도 주문 완료")
+                                else:
+                                    self.send_message(f"⚠️ 매도 실패: {result.get('msg1', '알 수 없음')}")
+                            except Exception as e:
+                                self.send_message(f"매도 오류: {e}")
                     else:
                         self.send_message(f"포지션에 {code} 없음. /status로 확인하세요.")
         finally:

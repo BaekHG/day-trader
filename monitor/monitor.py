@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -32,6 +34,7 @@ class PositionMonitor:
         self, stock_code: str, name: str, quantity: int, entry_price: int,
         target1: int, target2: int, stop_loss: int, sell_strategy: dict | None = None,
         buy_slippage_pct: float = 0.0, score: int = 0, phase: str = "morning",
+        is_momentum: bool = False, today_open: int = 0,
     ):
         self.positions[stock_code] = {
             "name": name, "quantity": quantity, "remaining_qty": quantity,
@@ -42,9 +45,12 @@ class PositionMonitor:
             "buy_slippage_pct": round(buy_slippage_pct, 3),
             "score": score,
             "phase": phase,
+            "is_momentum": is_momentum,
+            "today_open": today_open,
         }
         self._save_positions()
-        logger.info("포지션 추가: %s %d주 @ %s원", name, quantity, f"{entry_price:,}")
+        tag = "[모멘텀]" if is_momentum else ""
+        logger.info("%s포지션 추가: %s %d주 @ %s원", tag, name, quantity, f"{entry_price:,}")
 
     def remove_position(self, stock_code: str):
         if stock_code in self.positions:
@@ -82,32 +88,58 @@ class PositionMonitor:
                 self._execute_sell(code, pos, remaining, current, f"{config.FORCE_CLOSE_TIME} 강제 청산", pnl_pct)
                 continue
 
+            is_momentum = pos.get("is_momentum", False)
+
+            if is_momentum:
+                today_open = pos.get("today_open", 0)
+                if today_open > 0 and current < today_open:
+                    self._execute_sell(
+                        code, pos, remaining, current,
+                        "모멘텀 시가 하회 — 갭 실패 즉시 청산", pnl_pct,
+                    )
+                    continue
+
+            trailing_levels = (
+                config.MOMENTUM_TRAILING_STOP_LEVELS if is_momentum
+                else config.TRAILING_STOP_LEVELS
+            )
+
             effective_stop = pos["stop_loss"]
             high_pnl = (pos["high_since_entry"] - entry) / entry * 100 if entry else 0
-            for level_pnl, stop_pnl in config.TRAILING_STOP_LEVELS:
+            for level_pnl, stop_pnl in trailing_levels:
                 if high_pnl >= level_pnl:
                     trailing_stop = int(entry * (1 + stop_pnl / 100))
                     effective_stop = max(effective_stop, trailing_stop)
                     break
             if current <= effective_stop:
                 if effective_stop > pos["stop_loss"]:
-                    reason = f"트레일링 스탑 (고점 +{high_pnl:.1f}% → 손절선 +{((effective_stop - entry) / entry * 100):.1f}%)"
+                    tag = "모멘텀 " if is_momentum else ""
+                    reason = f"{tag}트레일링 스탑 (고점 +{high_pnl:.1f}% → 손절선 +{((effective_stop - entry) / entry * 100):.1f}%)"
                 else:
-                    reason = "손절"
+                    reason = "모멘텀 손절" if is_momentum else "손절"
                 self._execute_sell(code, pos, remaining, current, reason, pnl_pct)
                 continue
 
             pos_phase = pos.get("phase", "morning")
-            max_hold = config.AFTERNOON_MAX_HOLD_MINUTES if pos_phase == "afternoon" else config.MAX_HOLD_MINUTES
+            if is_momentum:
+                max_hold = config.MOMENTUM_TIME_STOP_MINUTES
+                min_profit_for_hold = config.MOMENTUM_TIME_STOP_MIN_PROFIT
+            elif pos_phase == "afternoon":
+                max_hold = config.AFTERNOON_MAX_HOLD_MINUTES
+                min_profit_for_hold = 1.0
+            else:
+                max_hold = config.MAX_HOLD_MINUTES
+                min_profit_for_hold = 1.0
 
             entry_time_str = pos.get("entry_time", "")
             if entry_time_str:
                 entry_dt = datetime.fromisoformat(entry_time_str)
                 hold_minutes = (now - entry_dt).total_seconds() / 60
-                if hold_minutes >= max_hold and abs(pnl_pct) < 1.0:
+                if hold_minutes >= max_hold and pnl_pct < min_profit_for_hold:
+                    tag = "모멘텀 " if is_momentum else ""
                     self._execute_sell(
                         code, pos, remaining, current,
-                        f"{max_hold}분 횡보 — 전량 매도", pnl_pct,
+                        f"{tag}{max_hold}분 횡보 — 전량 매도", pnl_pct,
                     )
                     continue
 
@@ -148,19 +180,23 @@ class PositionMonitor:
 
         success = False
         result = {}
-        for sell_attempt in range(3):
-            try:
-                result = self.kis.place_sell_order(code, qty)
-                success = result.get("rt_cd") == "0"
-                if success:
-                    break
-            except Exception as e:
-                logger.error("매도 주문 실패 %s (시도 %d/3): %s", name, sell_attempt + 1, e)
-                if sell_attempt < 2:
-                    time.sleep(2 ** sell_attempt)
-                    continue
-                self.bot.send_message(f"⚠️ {name} 매도 3회 실패: {e}")
-                return
+        if config.DRY_RUN:
+            success = True
+            logger.info("[모의] 매도 시뮬레이션: %s %d주 × %s원", name, qty, f"{price:,}")
+        else:
+            for sell_attempt in range(3):
+                try:
+                    result = self.kis.place_sell_order(code, qty)
+                    success = result.get("rt_cd") == "0"
+                    if success:
+                        break
+                except Exception as e:
+                    logger.error("매도 주문 실패 %s (시도 %d/3): %s", name, sell_attempt + 1, e)
+                    if sell_attempt < 2:
+                        time.sleep(2 ** sell_attempt)
+                        continue
+                    self.bot.send_message(f"⚠️ {name} 매도 3회 실패: {e}")
+                    return
 
         if success:
             pos.pop("_last_sell_error", None)
@@ -188,7 +224,7 @@ class PositionMonitor:
             })
             self._save_trades_today()
 
-            if self.db:
+            if self.db and not config.DRY_RUN:
                 ok = self.db.save_trade(
                     stock_code=code,
                     stock_name=name,
@@ -312,6 +348,8 @@ class PositionMonitor:
             self.trades_today = []
 
     def sync_with_balance(self) -> dict:
+        if config.DRY_RUN:
+            return {"added": [], "removed": []}
         try:
             holdings = self.kis.get_balance()
         except Exception as e:

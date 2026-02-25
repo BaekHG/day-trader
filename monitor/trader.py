@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 
 import config
@@ -133,6 +135,17 @@ class Trader:
                             order["name"], f"{order['stop_loss']:,}", stop_pct * 100,
                         )
 
+                if config.DRY_RUN:
+                    logger.info("[모의] 매수 시뮬레이션: %s %d주 × %s원", order["name"], order["quantity"], f"{order['price']:,}")
+                    results.append({
+                        **order,
+                        "success": True,
+                        "message": "[모의] 시뮬레이션 체결",
+                        "odno": "DRY_RUN",
+                        "ord_gno_brno": "DRY_RUN",
+                    })
+                    continue
+
                 result = self.kis.place_buy_order(
                     order["stock_code"], order["quantity"], order["price"],
                 )
@@ -167,6 +180,8 @@ class Trader:
         return results
 
     def cancel_unfilled_orders(self, pending_orders: list[dict]) -> list[dict]:
+        if config.DRY_RUN:
+            return []
         cancelled = []
         for order in pending_orders:
             odno = order.get("odno", "")
@@ -259,6 +274,14 @@ class Trader:
         return retry_results
 
     def check_fills(self, orders: list[dict]) -> list[dict]:
+        if config.DRY_RUN:
+            return [{
+                "stock_code": o["stock_code"],
+                "name": o["name"],
+                "quantity": o["quantity"],
+                "price": o["price"],
+                "amount": o["quantity"] * o["price"],
+            } for o in orders]
         try:
             fills_raw = self.kis.get_order_fills()
         except Exception as e:
