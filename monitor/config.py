@@ -60,7 +60,7 @@ MAX_ENTRY_DEVIATION_PCT = float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "3.0"))  # 
 
 # --- 오프닝 검증 (실시간 안전 필터) ---
 OPENING_MAX_GAP_DOWN_PCT = float(os.getenv("OPENING_MAX_GAP_DOWN_PCT", "-2.0"))  # 갭다운 한도 (전일 대비 %)
-OPENING_MAX_GAP_UP_PCT = float(os.getenv("OPENING_MAX_GAP_UP_PCT", "4.0"))  # 갭업 한도 — 초과 시 추격매수 방지 (%)
+OPENING_MAX_GAP_UP_PCT = float(os.getenv("OPENING_MAX_GAP_UP_PCT", "6.0"))  # 갭업 한도 — 초과 시 추격매수 방지 (%)
 OPENING_MIN_VOLUME = int(os.getenv("OPENING_MIN_VOLUME", "5000"))  # 최소 거래량 (5분간)
 # --- 시간 기반 청산 ---
 MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "30"))
@@ -88,7 +88,7 @@ BUY_CONFIRM_TIMEOUT = int(os.getenv("BUY_CONFIRM_TIMEOUT", "900"))
 DUAL_SOURCING_ENABLED = os.getenv("DUAL_SOURCING_ENABLED", "true").lower() == "true"
 DUAL_SOURCING_MIN_PRICE = int(os.getenv("DUAL_SOURCING_MIN_PRICE", "1000"))
 DUAL_SOURCING_MIN_VOLUME = int(os.getenv("DUAL_SOURCING_MIN_VOLUME", "100000"))
-DUAL_SOURCING_MIN_MARKET_CAP = int(os.getenv("DUAL_SOURCING_MIN_MARKET_CAP", "300000000000"))
+DUAL_SOURCING_MIN_MARKET_CAP = int(os.getenv("DUAL_SOURCING_MIN_MARKET_CAP", "0"))  # 시총 필터 비활성화 — 거래대금 필터로 유동성 확보
 
 NAVER_FALLBACK_STOCKS = [
     "005930", "000660", "035720", "035420", "051910",

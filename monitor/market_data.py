@@ -162,8 +162,8 @@ class MarketDataCollector:
             change_min = config.AFTERNOON_HARD_FILTER_CHANGE_MIN
             change_max = config.AFTERNOON_HARD_FILTER_CHANGE_MAX
         else:
-            change_min = 1.0
-            change_max = 4.0
+            change_min = 0.5
+            change_max = 6.0
 
         for s in stocks:
             name = s.get("hts_kor_isnm", "?")
@@ -180,8 +180,8 @@ class MarketDataCollector:
 
             raw_tv = str(s.get("acml_tr_pbmn", "0")).replace(",", "")
             trading_value = int(raw_tv) if raw_tv.isdigit() else 0
-            if trading_value > 0 and trading_value < 10_000_000_000:
-                logger.info("필터 제외 [거래대금 100억 미만]: %s (%s)", name, f"{trading_value:,}")
+            if trading_value > 0 and trading_value < 5_000_000_000:
+                logger.info("필터 제외 [거래대금 50억 미만]: %s (%s)", name, f"{trading_value:,}")
                 continue
 
             pos_from_high = s.get("position_from_high", -999)
@@ -211,8 +211,8 @@ class MarketDataCollector:
             rate_min = config.AFTERNOON_HARD_FILTER_CHANGE_MIN
             rate_max = config.AFTERNOON_HARD_FILTER_CHANGE_MAX
         else:
-            rate_min = 1.0
-            rate_max = 4.0
+            rate_min = 0.5
+            rate_max = 6.0
 
         source_a = self._get_volume_ranking_with_cap_filter()
         source_b = self._get_change_rate_ranking(rate_min, rate_max)
