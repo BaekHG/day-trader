@@ -114,7 +114,8 @@ def _score_volume_ratio(stock: dict) -> int:
     acml_vol = _to_int(stock.get("acml_vol", 0))
 
     if acml_vol > 0 and daily:
-        prev_vol = _to_int(daily[0].get("volume", 0))
+        prev_idx = 1 if len(daily) >= 2 else 0
+        prev_vol = _to_int(daily[prev_idx].get("volume", 0))
         if prev_vol > 0:
             ratio = acml_vol / prev_vol
         else:

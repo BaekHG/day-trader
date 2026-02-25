@@ -105,6 +105,7 @@ class KISClient:
         o = resp.json().get("output", {})
         return {
             "price": int(o.get("stck_prpr", 0)),
+            "open": int(o.get("stck_oprc", 0)),
             "change_pct": float(o.get("prdy_ctrt", 0)),
             "volume": int(o.get("acml_vol", 0)),
             "high": int(o.get("stck_hgpr", 0)),
