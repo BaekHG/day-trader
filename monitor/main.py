@@ -2,6 +2,7 @@
 Day Trader — 자동 단타 매매 시스템
 매일 08:40 분석 → 텔레그램 확인 → 매수 → 모니터링 → 매도 → 리포트
 """
+from __future__ import annotations
 
 import logging
 import os
@@ -181,6 +182,206 @@ def _build_score_fallback(top_stock: dict, cur_price: int, phase: str) -> dict:
     }
 
 
+def _count_momentum_losses(monitor: PositionMonitor) -> int:
+    count = 0
+    for t in monitor.trades_today:
+        if t.get("phase") == "momentum" and t.get("pnl_amt", 0) < 0:
+            count += 1
+    return count
+
+
+def _is_late_session() -> bool:
+    hh, mm = map(int, config.LATE_SESSION_START.split(":"))
+    return now_kst() >= now_kst().replace(hour=hh, minute=mm, second=0)
+
+
+def _try_momentum_entry(
+    kis: KISClient, bot: TelegramBot, db: Database,
+    collector: MarketDataCollector, trader: Trader,
+    monitor: PositionMonitor, sold_codes: set,
+    market_data: dict,
+) -> str | None:
+    if not config.MOMENTUM_ENABLED:
+        return None
+
+    if monitor.positions:
+        return None
+
+    kosdaq = market_data.get("kosdaq_index", {})
+    kosdaq_change = float(kosdaq.get("change_rate", "0") if isinstance(kosdaq, dict) else "0")
+    if kosdaq_change <= config.MARKET_INDEX_BLOCK_PCT:
+        logger.info("KOSDAQ %.1f%% — 시장 폭락 진입 차단 (한도 %.1f%%)",
+                    kosdaq_change, config.MARKET_INDEX_BLOCK_PCT)
+        bot.send_message(
+            f"🛑 KOSDAQ {kosdaq_change:+.1f}% — 시장 하락으로 모멘텀 진입 차단"
+        )
+        return None
+
+    late = _is_late_session()
+    if late and config.LATE_SESSION_REQUIRE_PROFIT:
+        daily_pnl = _get_daily_pnl_pct(monitor)
+        if daily_pnl <= 0:
+            logger.info("후반 시간대 + 오전 수익 없음 (%.1f%%) — 모멘텀 스킵", daily_pnl)
+            return None
+
+    momentum_losses = _count_momentum_losses(monitor)
+    if momentum_losses >= config.MOMENTUM_DAILY_MAX_LOSSES:
+        logger.info("모멘텀 일일 손절한도 도달 (%d/%d) — 모멘텀 스킵",
+                    momentum_losses, config.MOMENTUM_DAILY_MAX_LOSSES)
+        return None
+
+    logger.info("Phase 2M — 모멘텀 후보 소싱")
+    try:
+        momentum_stocks = collector.enrich_momentum_candidates(market_data.get("stock_news", {}))
+    except Exception as e:
+        logger.warning("모멘텀 소싱 실패: %s", e)
+        return None
+
+    if not momentum_stocks:
+        return None
+
+    top = momentum_stocks[0]
+    code = top.get("mksc_shrn_iscd", "")
+    name = top.get("hts_kor_isnm", "?")
+    change_pct = float(str(top.get("prdy_ctrt", "0")).replace(",", "") or "0")
+    m_score = top.get("momentum_score", 0)
+
+    min_score = config.LATE_SESSION_MIN_SCORE if late else config.MOMENTUM_MIN_SCORE
+    if m_score < min_score:
+        logger.info("모멘텀 1위 스코어 부족: %s (%.1f, 최소 %d) — 스킵",
+                    name, m_score, min_score)
+        return None
+
+    logger.info("모멘텀 1위: %s (%.1f%%, 스코어 %.1f) — 풀백 진입 확인", name, change_pct, m_score)
+    bot.send_message(
+        f"🚀 <b>모멘텀 후보 발견</b>\n\n"
+        f"{name} ({code})\n"
+        f"등락률: {change_pct:+.1f}%\n"
+        f"모멘텀 스코어: {m_score:.1f}\n"
+        f"풀백 진입 확인 중..."
+    )
+
+    if not collector.check_momentum_entry(code):
+        logger.info("모멘텀 풀백 미확인 — 다음 사이클 재시도")
+        bot.send_message(f"⏳ {name} 풀백 진입 조건 미충족 — 다음 사이클 재시도")
+        return None
+
+    try:
+        price_data = kis.get_current_price(code)
+        cur_price = price_data["price"]
+        now = now_kst()
+        today_open = price_data.get("open", 0) if (now.hour == 9 and now.minute < 30) else 0
+        today_high = price_data.get("high", 0)
+    except Exception as e:
+        logger.warning("모멘텀 현재가 조회 실패: %s", e)
+        return None
+
+    if cur_price <= 0:
+        return None
+
+    try:
+        available_cash = kis.get_available_cash()
+    except Exception:
+        available_cash = config.TOTAL_CAPITAL
+
+    pos_pct = config.LATE_SESSION_POSITION_PCT if late else config.MAX_POSITION_PCT
+    position_cash = int(available_cash * pos_pct / 100)
+    quantity = position_cash // cur_price
+    if quantity <= 0:
+        logger.info("모멘텀 주문 가능 수량 0주 — 스킵")
+        return None
+
+    if late:
+        stop_pct = config.LATE_SESSION_STOP_LOSS_PCT
+    else:
+        stop_pct = config.MOMENTUM_STOP_LOSS_PCT
+        for score_threshold, pct in config.MOMENTUM_STOP_LOSS_BY_SCORE:
+            if m_score >= score_threshold:
+                stop_pct = pct
+                break
+    stop_loss = int(cur_price * (1 - stop_pct / 100))
+
+    order = {
+        "stock_code": code,
+        "name": name,
+        "price": cur_price,
+        "quantity": quantity,
+        "reason": f"모멘텀 진입 ({change_pct:+.1f}%, 스코어 {m_score:.1f})",
+        "target1": int(cur_price * 1.05),
+        "target2": int(cur_price * 1.10),
+        "stop_loss": stop_loss,
+        "score": int(m_score),
+        "sell_strategy": {"breakoutHold": "모멘텀 트레일링", "breakoutFail": "갭실패 즉시청산"},
+    }
+
+    bot.send_message(
+        f"🚀 <b>모멘텀 매수 진행</b>\n\n"
+        f"{name} {quantity}주 × {cur_price:,}원\n"
+        f"투입금: {quantity * cur_price:,}원 (자본 {pos_pct}%)\n"
+        f"손절선: {stop_loss:,}원 (-{stop_pct}%)"
+    )
+
+    results = trader.execute_buy_orders([order])
+    success = [r for r in results if r["success"]]
+    if not success:
+        bot.send_message(f"⚠️ {name} 모멘텀 매수 실패")
+        return None
+
+    fills = []
+    for attempt in range(4):
+        time.sleep(15)
+        result = trader.check_fills(success)
+        if result is None:
+            continue
+        fills = result
+        if fills:
+            break
+
+    if fills:
+        f = fills[0]
+        fill_price = f["price"]
+        buy_slippage = (fill_price - cur_price) / cur_price * 100 if cur_price > 0 else 0
+        adjusted_stop = int(fill_price * (1 - stop_pct / 100))
+
+        bot.send_fill_confirmation(fills)
+        monitor.add_position(
+            stock_code=f["stock_code"],
+            name=f["name"],
+            quantity=f["quantity"],
+            entry_price=fill_price,
+            target1=order["target1"],
+            target2=order["target2"],
+            stop_loss=adjusted_stop,
+            sell_strategy=order["sell_strategy"],
+            buy_slippage_pct=buy_slippage,
+            score=order["score"],
+            phase="momentum",
+            is_momentum=True,
+            today_open=today_open,
+        )
+
+        if not config.DRY_RUN and db:
+            db.save_trade(
+                stock_code=f["stock_code"], stock_name=f["name"],
+                action="buy", quantity=f["quantity"], price=fill_price,
+                reason=order["reason"],
+            )
+
+        return "momentum_entered"
+
+    if not config.DRY_RUN:
+        try:
+            pending = kis.get_pending_orders()
+            momentum_pending = [p for p in pending if p["stock_code"] == code]
+            if momentum_pending:
+                trader.cancel_unfilled_orders(momentum_pending)
+                bot.send_message(f"⏳ {name} 모멘텀 미체결 취소")
+        except Exception as e:
+            logger.warning("모멘텀 미체결 취소 실패: %s", e)
+
+    return None
+
+
 def _past_entry_cutoff() -> bool:
     hh, mm = map(int, config.NO_NEW_ENTRY_AFTER.split(":"))
     n = now_kst()
@@ -355,24 +556,26 @@ def run_daily_cycle():
     trader = Trader(kis, bot, db)
     monitor = PositionMonitor(kis, bot, db)
 
-    logger.info("KIS 잔고 ↔ positions.json 동기화")
-    sync_result = monitor.sync_with_balance()
-    if sync_result["added"] or sync_result["removed"]:
-        lines = ["🔄 <b>포지션 동기화 완료</b>"]
-        for h in sync_result["added"]:
-            lines.append(f"  ➕ {h['name']} {h['quantity']}주 @ {h['avg_price']:,}원")
-        for name in sync_result["removed"]:
-            lines.append(f"  ➖ {name} (청산됨)")
-        bot.send_message("\n".join(lines))
+    if not config.DRY_RUN:
+        logger.info("KIS 잔고 ↔ positions.json 동기화")
+        sync_result = monitor.sync_with_balance()
+        if sync_result["added"] or sync_result["removed"]:
+            lines = ["🔄 <b>포지션 동기화 완료</b>"]
+            for h in sync_result["added"]:
+                lines.append(f"  ➕ {h['name']} {h['quantity']}주 @ {h['avg_price']:,}원")
+            for name in sync_result["removed"]:
+                lines.append(f"  ➖ {name} (청산됨)")
+            bot.send_message("\n".join(lines))
 
     bot.start_polling(kis, monitor)
 
-    if is_weekend():
+    if is_weekend() and not config.DRY_RUN:
         bot.send_message("주말입니다. 월요일에 다시 시작합니다.")
         logger.info("주말 — 종료")
         return bot
 
-    bot.send_message(f"🔔 Day Trader 시작 ({now_kst().strftime('%Y.%m.%d %H:%M')})")
+    mode_label = " [모의투자]" if config.DRY_RUN else ""
+    bot.send_message(f"🔔 Day Trader 시작{mode_label} ({now_kst().strftime('%Y.%m.%d %H:%M')})")
 
     sold_codes: set[str] = set()
     for t in monitor.trades_today:
@@ -394,7 +597,7 @@ def run_daily_cycle():
             _send_daily_report(monitor, bot, db)
             return bot
 
-    if not past_analysis_time():
+    if not past_analysis_time() and not config.DRY_RUN:
         wait_until(config.ANALYSIS_TIME, bot, kis, monitor)
 
     cycle = 0
@@ -611,6 +814,20 @@ def _run_one_cycle(
 
     logger.info("enriched %d 종목", len(enriched))
 
+    if not monitor.positions:
+        momentum_result = _try_momentum_entry(
+            kis, bot, db, collector, trader, monitor, sold_codes, market_data,
+        )
+        if momentum_result == "momentum_entered":
+            logger.info("모멘텀 진입 성공 — 모니터링 전환")
+            return _run_monitoring_loop(
+                monitor, bot, kis, collector, analyzer, trader, sold_codes, phase="momentum",
+            )
+        if monitor.positions:
+            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+        logger.info("모멘텀 후보 없음 — 다음 사이클 대기")
+        return "no_picks"
+
     if not enriched:
         logger.info("하드 필터 통과 종목 0개 — 이번 사이클 매매 비추천")
         bot.send_message("📊 하드 필터 통과 종목 없음 — 시장 조건 재확인 후 재시도합니다.")
@@ -645,7 +862,7 @@ def _run_one_cycle(
 
     logger.info("분석 완료 (AI=%s) — 추천: %s",
                 ai_used, analysis.get("marketAssessment", {}).get("recommendation", "?"))
-    if not db.save_analysis(analysis):
+    if not config.DRY_RUN and not db.save_analysis(analysis):
         logger.warning("분석 DB 저장 실패")
         bot.send_message("⚠️ 분석 결과 DB 저장 실패")
 
@@ -867,16 +1084,17 @@ def _run_one_cycle(
                 )
 
     pending = []
-    for pq_attempt in range(3):
-        try:
-            pending = kis.get_pending_orders()
-            break
-        except Exception as e:
-            logger.error("미체결 조회 실패 (시도 %d/3): %s", pq_attempt + 1, e)
-            if pq_attempt < 2:
-                time.sleep(2)
-            else:
-                bot.send_message("⚠️ 미체결 조회 3회 실패 — /balance 로 수동 확인 필요")
+    if not config.DRY_RUN:
+        for pq_attempt in range(3):
+            try:
+                pending = kis.get_pending_orders()
+                break
+            except Exception as e:
+                logger.error("미체결 조회 실패 (시도 %d/3): %s", pq_attempt + 1, e)
+                if pq_attempt < 2:
+                    time.sleep(2)
+                else:
+                    bot.send_message("⚠️ 미체결 조회 3회 실패 — /balance 로 수동 확인 필요")
 
     if pending:
         logger.info("Phase 8.5 — 미체결 %d건 재분석", len(pending))
@@ -1015,6 +1233,13 @@ def _sleep_until_midnight():
 
 
 if __name__ == "__main__":
+    import argparse
+    _parser = argparse.ArgumentParser(description="Day Trader")
+    _parser.add_argument("--dry-run", action="store_true", help="모의투자 모드")
+    _args = _parser.parse_args()
+    if _args.dry_run:
+        config.DRY_RUN = True
+
     while True:
         _bot = None
         try:
@@ -1028,6 +1253,9 @@ if __name__ == "__main__":
                 TelegramBot().send_message(f"❌ Day Trader 오류 발생: {e}")
             except Exception:
                 pass
+        if config.DRY_RUN:
+            logger.info("모의투자 1회 완료 — 종료")
+            break
         _sleep_until_midnight()
         if _bot:
             _bot.stop_polling()
