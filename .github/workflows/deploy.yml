@@ -34,8 +34,13 @@ jobs:
             monitor/db.py \
             monitor/stock_scorer.py \
             monitor/backtester.py \
+            monitor/force_close_failsafe.py \
             monitor/requirements.txt \
             harry@ai-shorts-server:/home/harry/day-trader/
+          gcloud compute scp --zone=asia-northeast3-a \
+            monitor/day-trader-failsafe.service \
+            monitor/day-trader-failsafe.timer \
+            harry@ai-shorts-server:/tmp/
 
       - name: Inject secrets into .env
         run: |
@@ -44,6 +49,17 @@ jobs:
             touch .env &&
             grep -q TELEGRAM_BOT_TOKEN .env && sed -i 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}/' .env || echo 'TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}' >> .env &&
             grep -q TELEGRAM_CHAT_ID .env && sed -i 's/^TELEGRAM_CHAT_ID=.*/TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}/' .env || echo 'TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}' >> .env
+          "
+
+      - name: Install failsafe timer
+        run: |
+          gcloud compute ssh harry@ai-shorts-server --zone=asia-northeast3-a --command="
+            sudo cp /tmp/day-trader-failsafe.service /etc/systemd/system/ &&
+            sudo cp /tmp/day-trader-failsafe.timer /etc/systemd/system/ &&
+            sudo systemctl daemon-reload &&
+            sudo systemctl enable day-trader-failsafe.timer &&
+            sudo systemctl start day-trader-failsafe.timer &&
+            echo 'Failsafe timer installed'
           "
 
       - name: Install dependencies & verify

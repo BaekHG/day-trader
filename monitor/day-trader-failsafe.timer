@@ -1,0 +1,9 @@
+[Unit]
+Description=Run force-close failsafe at 15:15 KST every weekday
+
+[Timer]
+OnCalendar=Mon..Fri 15:15
+Persistent=true
+
+[Install]
+WantedBy=timers.target

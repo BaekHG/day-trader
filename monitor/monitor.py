@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import threading
 import time
 from datetime import datetime
@@ -278,8 +279,10 @@ class PositionMonitor:
 
     def _save_positions(self):
         try:
-            with open(config.POSITIONS_FILE, "w") as f:
+            tmp = config.POSITIONS_FILE + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump(self.positions, f, ensure_ascii=False, indent=2)
+            os.rename(tmp, config.POSITIONS_FILE)
         except Exception as e:
             logger.error("포지션 저장 실패: %s", e)
 
@@ -289,8 +292,10 @@ class PositionMonitor:
                 "date": datetime.now(KST).strftime("%Y-%m-%d"),
                 "trades": self.trades_today,
             }
-            with open(config.TRADES_FILE, "w") as f:
+            tmp = config.TRADES_FILE + ".tmp"
+            with open(tmp, "w") as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            os.rename(tmp, config.TRADES_FILE)
         except Exception as e:
             logger.error("거래 내역 저장 실패: %s", e)
 

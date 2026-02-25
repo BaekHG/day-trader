@@ -127,6 +127,60 @@ def _recalc_stop_loss(fill_price: int, order_price: int, ai_stop: int) -> int:
     return adjusted
 
 
+def _build_score_fallback(top_stock: dict, cur_price: int, phase: str) -> dict:
+    """AI 실패 시 스코어 1위 종목으로 구성한 최소 분석 결과."""
+    name = top_stock.get("hts_kor_isnm", "?")
+    code = top_stock.get("mksc_shrn_iscd", "")
+    score = top_stock.get("score", 0)
+    stop_pct = config.AFTERNOON_MIN_STOP_LOSS_PCT if phase == "afternoon" else config.MIN_STOP_LOSS_PCT
+
+    return {
+        "marketAssessment": {
+            "score": 50,
+            "riskFactors": "AI 분석 불가 — 스코어 기반 fallback",
+            "favorableThemes": [],
+            "recommendation": "매매추천" if score >= 60 else "매매비추천",
+        },
+        "vetoResult": {
+            "approved": score >= 60,
+            "reason": f"AI 불가 — 정량 스코어 {score}점 기반 자동 판단",
+            "newsRisk": "분석 불가",
+            "confidence": min(score, 70),
+        },
+        "picks": [
+            {
+                "rank": 1,
+                "symbol": code,
+                "name": name,
+                "currentPrice": cur_price,
+                "reason": {"news": "AI 불가", "supply": "스코어 기반", "chart": "스코어 기반"},
+                "setupType": ["score_fallback"],
+                "positionFromHigh": 0,
+                "entryZone": {"low": int(cur_price * 0.995), "high": int(cur_price * 1.005)},
+                "stopLoss": int(cur_price * (1 - stop_pct / 100)),
+                "target1": int(cur_price * 1.02),
+                "target2": int(cur_price * 1.03),
+                "confidence": min(score, 70),
+                "tags": ["score_fallback"],
+                "allocation": 70,
+                "sellStrategy": {
+                    "breakoutHold": "트레일링 스탑",
+                    "breakoutFail": "즉시 손절",
+                    "volumeDrop": "거래량 급감 시 청산",
+                    "sideways": "횡보 시 시간 청산",
+                },
+                "score": score,
+            },
+        ] if score >= 60 else [],
+        "riskAnalysis": {
+            "failureFactors": "AI 분석 불가 — 뉴스 리스크 미확인",
+            "successProbability": min(score, 50),
+        },
+        "marketSummary": "AI 분석 불가 — 정량 스코어만으로 판단",
+        "marketScore": 50,
+    }
+
+
 def _past_entry_cutoff() -> bool:
     hh, mm = map(int, config.NO_NEW_ENTRY_AFTER.split(":"))
     n = now_kst()
@@ -565,6 +619,7 @@ def _run_one_cycle(
         return "no_picks"
 
     logger.info("Phase 3 — AI 분석 중")
+    ai_used = True
     try:
         positions_info = [
             {"name": p["name"], "code": c, "remaining_qty": p["remaining_qty"]}
@@ -581,14 +636,18 @@ def _run_one_cycle(
             current_positions=positions_info or None,
         )
     except Exception as e:
-        logger.error("AI 분석 실패: %s", e)
-        bot.send_message(f"AI 분석 실패: {e}")
-        return "error"
+        logger.error("AI 분석 실패 — 스코어 기반 fallback 진행: %s", e)
+        bot.send_message(f"⚠️ AI 분석 실패 ({e}) — 스코어 기반 fallback 진행")
+        ai_used = False
+        top = enriched[0]
+        cur_price = int(top.get("stck_prpr", 0))
+        analysis = _build_score_fallback(top, cur_price, phase)
 
-    logger.info("AI 분석 완료 — 추천: %s", analysis.get("marketAssessment", {}).get("recommendation", "?"))
+    logger.info("분석 완료 (AI=%s) — 추천: %s",
+                ai_used, analysis.get("marketAssessment", {}).get("recommendation", "?"))
     if not db.save_analysis(analysis):
-        logger.warning("AI 분석 DB 저장 실패")
-        bot.send_message("⚠️ AI 분석 결과 DB 저장 실패")
+        logger.warning("분석 DB 저장 실패")
+        bot.send_message("⚠️ 분석 결과 DB 저장 실패")
 
     try:
         available_cash = kis.get_available_cash()
@@ -601,6 +660,7 @@ def _run_one_cycle(
     analysis["_kospi"] = market_data["kospi_index"]
     analysis["_kosdaq"] = market_data["kosdaq_index"]
     analysis["_exchange_rate"] = market_data["exchange_rate"]
+    analysis["_ai_used"] = ai_used
     bot.send_analysis_result(analysis, available_cash)
 
     recommendation = analysis.get("marketAssessment", {}).get("recommendation", "")
@@ -612,7 +672,7 @@ def _run_one_cycle(
         if "score" not in pick:
             pick["score"] = enriched_score_map.get(pick.get("symbol", ""), 0)
 
-    if veto and not veto.get("approved", True):
+    if ai_used and veto and not veto.get("approved", True):
         veto_reason = veto.get("reason", "사유 없음")
         logger.info("AI veto 거부: %s", veto_reason)
         bot.send_message(f"🚫 AI Veto 거부: {veto_reason}")

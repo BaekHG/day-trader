@@ -52,9 +52,7 @@ AFTERNOON_CYCLE_COOLDOWN = int(os.getenv("AFTERNOON_CYCLE_COOLDOWN", "900"))  # 
 AFTERNOON_HARD_FILTER_CHANGE_MIN = float(os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MIN", "-0.5"))
 AFTERNOON_HARD_FILTER_CHANGE_MAX = float(os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MAX", "3.0"))
 
-# --- 손절 보호 (소자본 타이트 관리) ---
-STOP_LOSS_GRACE_MINUTES = int(os.getenv("STOP_LOSS_GRACE_MINUTES", "2"))  # 진입 후 손절 유예 (분)
-MIN_STOP_LOSS_PCT = float(os.getenv("MIN_STOP_LOSS_PCT", "1.2"))  # 최소 손절 거리 (%)
+MIN_STOP_LOSS_PCT = float(os.getenv("MIN_STOP_LOSS_PCT", "1.2"))
 MAX_ENTRY_DEVIATION_PCT = float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "3.0"))  # 현재가 vs 지정가 허용 괴리 (%)
 
 

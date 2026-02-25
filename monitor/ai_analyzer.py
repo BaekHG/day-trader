@@ -158,7 +158,7 @@ class AIAnalyzer:
                         ],
                         "temperature": 0,
                     },
-                    timeout=90,
+                    timeout=30,
                 )
                 resp.raise_for_status()
                 data = resp.json()

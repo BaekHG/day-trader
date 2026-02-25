@@ -125,7 +125,7 @@ class Database:
     def save_analysis(self, analysis: dict) -> bool:
         assessment = analysis.get("marketAssessment", {})
         picks = analysis.get("picks", [])
-        return self._post("ai_analyses", {
+        data = {
             "market_score": analysis.get("marketScore", 0),
             "recommendation": assessment.get("recommendation", ""),
             "risk_factors": assessment.get("riskFactors", ""),
@@ -135,7 +135,11 @@ class Database:
             "market_summary": analysis.get("marketSummary", ""),
             "success_probability": analysis.get("riskAnalysis", {}).get("successProbability", 0),
             "analyzed_at": datetime.now(KST).isoformat(),
-        })
+        }
+        ai_used = analysis.get("_ai_used")
+        if ai_used is not None:
+            data["ai_used"] = ai_used
+        return self._post("ai_analyses", data)
 
     # ──────────────────────────────────────
     # 일일 리포트
