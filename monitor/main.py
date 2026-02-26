@@ -261,9 +261,10 @@ def _try_momentum_entry(
         f"풀백 진입 확인 중..."
     )
 
-    if not collector.check_momentum_entry(code):
-        logger.info("모멘텀 풀백 미확인 — 다음 사이클 재시도")
-        bot.send_message(f"⏳ {name} 풀백 진입 조건 미충족 — 다음 사이클 재시도")
+    entry_ok, entry_reason = collector.check_momentum_entry(code)
+    if not entry_ok:
+        logger.info("모멘텀 풀백 미확인 — %s — 다음 사이클 재시도", entry_reason)
+        bot.send_message(f"⏳ {name} 풀백 진입 미충족\n사유: {entry_reason}")
         return None
 
     try:

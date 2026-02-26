@@ -418,7 +418,7 @@ class MarketDataCollector:
                         s.get("score_detail", {}).get("breakdown", ""))
         return candidates
 
-    def check_momentum_entry(self, code: str) -> bool:
+    def check_momentum_entry(self, code: str) -> tuple[bool, str]:
         try:
             with self._kis_semaphore:
                 candles = self.kis.get_minute_candles(code)
@@ -438,7 +438,7 @@ class MarketDataCollector:
             if intraday_ratio < config.MOMENTUM_MIN_HIGH_RATIO:
                 logger.info("모멘텀 진입 거부 [장중 고점 대비 %.1f%% < %.0f%%]: %s",
                             intraday_ratio * 100, config.MOMENTUM_MIN_HIGH_RATIO * 100, code)
-                return False
+                return False, f"장중 고점 대비 {intraday_ratio*100:.1f}% ({config.MOMENTUM_MIN_HIGH_RATIO*100:.0f}% 미만)"
 
         if len(candles) >= 3:
             prev2 = candles[2]
@@ -458,7 +458,7 @@ class MarketDataCollector:
             if prev2_high > 0 and curr_high < prev_high < prev2_high and drop_pct >= 0.003:
                 logger.info("모멘텀 감속 감지: %s (고점 하락 %s→%s→%s, -%.2f%%) — 진입 거부",
                             code, f"{prev2_high:,}", f"{prev_high:,}", f"{curr_high:,}", drop_pct * 100)
-                return False
+                return False, f"감속 감지 (고점 {prev2_high:,}→{prev_high:,}→{curr_high:,}, -{drop_pct*100:.1f}%)"
 
             is_pullback = prev_close <= prev_open
             breakout = curr_close > prev_high
@@ -466,7 +466,7 @@ class MarketDataCollector:
 
             if is_pullback and breakout and vol_confirm:
                 logger.info("모멘텀 풀백 진입 확인: %s (풀백→돌파, 거래량 확인)", code)
-                return True
+                return True, "풀백→돌파 + 거래량 확인"
 
             current = int(str(candles[0].get("stck_prpr", 0)).replace(",", "") or 0)
             today_high = max(
@@ -477,9 +477,9 @@ class MarketDataCollector:
                 vol_strong = curr_vol > prev_vol * 0.8
                 if near_high and vol_strong:
                     logger.info("모멘텀 고점 근접 진입: %s (고점 %.1f%%↑, 거래량 유지)", code, current / today_high * 100)
-                    return True
+                    return True, f"고점 {current/today_high*100:.1f}%↑ + 거래량 유지"
 
-            return False
+            return False, "캔들 패턴 미충족 (풀백돌파✗, 고점근접✗)"
 
         # ── Fallback: 5분봉 없을 때 현재가 기반 진입 판단 ──
         logger.info("모멘텀 5분봉 부족 (%d개) — 현재가 기반 fallback 진입 판단: %s", len(candles), code)
@@ -487,7 +487,7 @@ class MarketDataCollector:
             with self._kis_semaphore:
                 price_data = self.kis.get_current_price(code)
         except Exception:
-            return False
+            return False, "현재가 조회 실패"
 
         current = price_data.get("price", 0)
         today_high = price_data.get("high", 0)
@@ -495,27 +495,27 @@ class MarketDataCollector:
         volume = price_data.get("volume", 0)
 
         if current <= 0 or today_high <= 0:
-            return False
+            return False, "가격 데이터 없음"
 
         # 조건 1: 고점 대비 config 기준 이상 유지 (fallback이므로 config값 그대로)
         high_ratio = current / today_high
         if high_ratio < config.MOMENTUM_MIN_HIGH_RATIO:
             logger.info("모멘텀 fallback 거부: %s 고점 대비 %.1f%% (%.0f%% 미만)", code, high_ratio * 100, config.MOMENTUM_MIN_HIGH_RATIO * 100)
-            return False
+            return False, f"고점 대비 {high_ratio*100:.1f}% ({config.MOMENTUM_MIN_HIGH_RATIO*100:.0f}% 미만)"
 
         # 조건 2: 시가 대비 양봉 (시가 이상)
         if today_open > 0 and current < today_open:
             logger.info("모멘텀 fallback 거부: %s 시가 하회 (%s < %s)", code, f"{current:,}", f"{today_open:,}")
-            return False
+            return False, f"시가 하회 ({current:,} < {today_open:,})"
 
         # 조건 3: 최소 거래량 확인
         if volume < config.MOMENTUM_MIN_VOLUME:
             logger.info("모멘텀 fallback 거부: %s 거래량 부족 (%s < %s)",
                         code, f"{volume:,}", f"{config.MOMENTUM_MIN_VOLUME:,}")
-            return False
+            return False, f"거래량 부족 ({volume:,} < {config.MOMENTUM_MIN_VOLUME:,})"
 
         logger.info("모멘텀 fallback 진입 확인: %s (고점 %.1f%%, 시가↑, 거래량 %s)", code, high_ratio * 100, f"{volume:,}")
-        return True
+        return True, f"fallback 통과 (고점 {high_ratio*100:.1f}%, 거래량 {volume:,})"
 
     @staticmethod
     def _apply_hard_filters(stocks: list[dict], is_market_open: bool, phase: str = "morning") -> list[dict]:
