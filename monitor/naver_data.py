@@ -187,3 +187,54 @@ class NaverNewsService:
             return []
         except Exception:
             return []
+
+    def get_market_news(self) -> list[dict]:
+        """시장 전체 주요 뉴스 헤드라인 수집 (불장 모드 센티먼트 분석용).
+
+        1차: 지수 코드(KOSPI/KOSDAQ/KPI200) 뉴스 — 시장 전체 뉴스
+        2차: 섹터 대표주 10종목 뉴스 합산 — 섹터별 테마 포착
+        """
+        seen_titles: set[str] = set()
+        merged: list[dict] = []
+
+        def _collect(code: str):
+            try:
+                resp = requests.get(
+                    f"https://m.stock.naver.com/api/news/stock/{code}",
+                    params={"pageSize": 5},
+                    timeout=5,
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                for group in data:
+                    if isinstance(group, dict):
+                        for a in self._parse_items(group.get("items", [])):
+                            title = a.get("title", "")
+                            if title and title not in seen_titles:
+                                seen_titles.add(title)
+                                merged.append(a)
+            except Exception:
+                pass
+
+        # 1차: 지수 코드 — 시장 전체 뉴스 (가장 중요)
+        for idx_code in ("KPI200", "KOSPI", "KOSDAQ"):
+            _collect(idx_code)
+        if len(merged) >= 10:
+            return merged[:20]
+
+        # 2차: 섹터 대표주 — 거시 테마 포착 (반도체/방산/원전/자동차/쳊강/바이오/금융/배터리/IT)
+        sector_codes = [
+            "005930",  # 삼성전자 (반도체)
+            "000660",  # SK하이닉스 (반도체)
+            "012450",  # 한화에어로스페이스 (방산)
+            "015760",  # 한국전력 (전력/원전)
+            "005380",  # 현대차 (자동차/수출)
+            "005490",  # POSCO홀딩스 (쳊강/소재)
+            "207940",  # 삼성바이오로직스 (바이오)
+            "105560",  # KB금융 (금융)
+            "373220",  # LG에너지솔루션 (배터리)
+            "035420",  # NAVER (IT/플랫폼)
+        ]
+        for code in sector_codes:
+            _collect(code)
+        return merged[:20]
