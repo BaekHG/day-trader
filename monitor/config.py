@@ -151,6 +151,15 @@ LATE_SESSION_MIN_SCORE = 65
 LATE_SESSION_STOP_LOSS_PCT = 2.0
 LATE_SESSION_REQUIRE_PROFIT = os.getenv("LATE_SESSION_REQUIRE_PROFIT", "false").lower() == "true"
 
+# --- 장 초반 빠른 진입 모드 (09:00~09:10) ---
+# 초반 10분간 모멘텀 진입 조건 완화: 낮은 스코어/등락률도 진입 허용
+EARLY_MORNING_MINUTES = int(os.getenv("EARLY_MORNING_MINUTES", "10"))
+EARLY_MOMENTUM_RATE_MIN = float(os.getenv("EARLY_MOMENTUM_RATE_MIN", "3.0"))  # 소싱 등락률 하한 3% (평시 5%)
+EARLY_MOMENTUM_MIN_SCORE = int(os.getenv("EARLY_MOMENTUM_MIN_SCORE", "35"))  # 최소 스코어 35 (평시 50)
+EARLY_MOMENTUM_VOL_GATE = float(os.getenv("EARLY_MOMENTUM_VOL_GATE", "1.5"))  # 거래량 게이트 1.5 (평시 2.0)
+EARLY_CYCLE_COOLDOWN = int(os.getenv("EARLY_CYCLE_COOLDOWN", "90"))  # 쿨다운 90초 (평시 180초)
+EARLY_FALLBACK_OPEN_TOLERANCE = float(os.getenv("EARLY_FALLBACK_OPEN_TOLERANCE", "0.005"))  # 시가 대비 0.5% 하회 허용
+
 MARKET_INDEX_BLOCK_PCT = -1.0   # KOSDAQ 이 값 이하 시 모멘텀 진입 차단
 
 # --- 거래대금 필터 (가격대별 차등) ---
