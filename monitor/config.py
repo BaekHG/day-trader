@@ -123,16 +123,17 @@ MOMENTUM_VOL_SUSTAIN_RATIO = float(os.getenv("MOMENTUM_VOL_SUSTAIN_RATIO", "0.7"
 MOMENTUM_ENTRY_START = os.getenv("MOMENTUM_ENTRY_START", "09:02")   # 모멘텀 진입 시작
 MOMENTUM_ENTRY_END = os.getenv("MOMENTUM_ENTRY_END", "14:30")       # 모멘텀 진입 종료
 MOMENTUM_STOP_LOSS_PCT = float(os.getenv("MOMENTUM_STOP_LOSS_PCT", "2.5"))  # 모멘텀 손절 기본값
-MOMENTUM_MIN_SCORE = int(os.getenv("MOMENTUM_MIN_SCORE", "60"))
+MOMENTUM_MIN_SCORE = int(os.getenv("MOMENTUM_MIN_SCORE", "50"))
 MOMENTUM_STOP_LOSS_BY_SCORE = [
-    (80, 3.5),   # 스코어 80+ → -3.5% (확신 높음, 버틴다)
-    (60, 2.5),   # 스코어 60~79 → -2.5% (기본)
+    (70, 3.5),   # 스코어 70+ → -3.5% (확신 높음, 버틴다)
+    (50, 2.5),   # 스코어 50~69 → -2.5% (기본)
 ]
 MOMENTUM_TIME_STOP_MINUTES = int(os.getenv("MOMENTUM_TIME_STOP_MINUTES", "20"))  # 20분 횡보 시 청산
 MOMENTUM_TIME_STOP_MIN_PROFIT = float(os.getenv("MOMENTUM_TIME_STOP_MIN_PROFIT", "0.5"))  # 20분 후 +0.5% 미만이면 청산
 MOMENTUM_DAILY_MAX_LOSSES = int(os.getenv("MOMENTUM_DAILY_MAX_LOSSES", "2"))  # 하루 모멘텀 손절 2회 → 당일 중단
 MOMENTUM_OPTIMAL_CHANGE_MIN = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MIN", "8.0"))  # 스코어링: 최적 등락률 하한
 MOMENTUM_OPTIMAL_CHANGE_MAX = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MAX", "15.0"))  # 스코어링: 최적 등락률 상한
+MOMENTUM_VOL_GATE = float(os.getenv("MOMENTUM_VOL_GATE", "2.0"))  # 시간보정 거래량비 최소 게이트 (ln스케일)
 
 # 모멘텀 트레일링 스톱 (일반보다 넓음 — 모멘텀주 정상 변동폭 수용)
 MOMENTUM_TRAILING_STOP_LEVELS = [
@@ -146,7 +147,7 @@ MOMENTUM_TRAILING_STOP_LEVELS = [
 # --- 후반 시간대 (10:30 이후) 보수적 파라미터 ---
 LATE_SESSION_START = "10:30"
 LATE_SESSION_POSITION_PCT = 40
-LATE_SESSION_MIN_SCORE = 75
+LATE_SESSION_MIN_SCORE = 65
 LATE_SESSION_STOP_LOSS_PCT = 2.0
 LATE_SESSION_REQUIRE_PROFIT = True   # 오전 수익 중일 때만 진입
 
