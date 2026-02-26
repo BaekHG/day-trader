@@ -306,6 +306,7 @@ def _try_momentum_entry(
         "name": name,
         "price": cur_price,
         "quantity": quantity,
+        "amount": quantity * cur_price,
         "reason": f"모멘텀 진입 ({change_pct:+.1f}%, 스코어 {m_score:.1f})",
         "target1": int(cur_price * 1.05),
         "target2": int(cur_price * 1.10),
