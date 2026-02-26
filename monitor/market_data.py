@@ -425,6 +425,21 @@ class MarketDataCollector:
         except Exception:
             candles = []
 
+        # ── 공통 게이트: 장중 전체 고점 대비 체크 (캔들/fallback 무관) ──
+        try:
+            with self._kis_semaphore:
+                price_info = self.kis.get_current_price(code)
+        except Exception:
+            price_info = {}
+        intraday_high = price_info.get("high", 0)
+        intraday_cur = price_info.get("price", 0)
+        if intraday_high > 0 and intraday_cur > 0:
+            intraday_ratio = intraday_cur / intraday_high
+            if intraday_ratio < config.MOMENTUM_MIN_HIGH_RATIO:
+                logger.info("모멘텀 진입 거부 [장중 고점 대비 %.1f%% < %.0f%%]: %s",
+                            intraday_ratio * 100, config.MOMENTUM_MIN_HIGH_RATIO * 100, code)
+                return False
+
         if len(candles) >= 3:
             prev2 = candles[2]
             prev = candles[1]
