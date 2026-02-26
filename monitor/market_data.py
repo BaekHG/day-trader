@@ -439,9 +439,10 @@ class MarketDataCollector:
             curr_vol = int(str(curr.get("cntg_vol", 0)).replace(",", "") or 0)
             prev_vol = int(str(prev.get("cntg_vol", 0)).replace(",", "") or 0)
 
-            if prev2_high > 0 and curr_high < prev_high < prev2_high:
-                logger.info("모멘텀 감속 감지: %s (고점 하락 %s→%s→%s) — 진입 거부",
-                            code, f"{prev2_high:,}", f"{prev_high:,}", f"{curr_high:,}")
+            drop_pct = (prev2_high - curr_high) / prev2_high if prev2_high > 0 else 0
+            if prev2_high > 0 and curr_high < prev_high < prev2_high and drop_pct >= 0.003:
+                logger.info("모멘텀 감속 감지: %s (고점 하락 %s→%s→%s, -%.2f%%) — 진입 거부",
+                            code, f"{prev2_high:,}", f"{prev_high:,}", f"{curr_high:,}", drop_pct * 100)
                 return False
 
             is_pullback = prev_close <= prev_open
