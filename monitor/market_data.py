@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from threading import Semaphore
@@ -333,37 +334,70 @@ class MarketDataCollector:
         return round(max(bonus, 0.5), 2)
 
     def _score_momentum_candidates(self, candidates: list[dict]) -> list[dict]:
+        now = datetime.now(KST)
+        market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        minutes_elapsed = max((now - market_open).total_seconds() / 60, 1)
+
+        # 시간대별 예상 거래량 비율 (U-curve: 초반25% / 중반50% / 마감25%)
+        if minutes_elapsed <= 30:
+            expected_pct = 0.25 * (minutes_elapsed / 30)
+        elif minutes_elapsed <= 360:
+            expected_pct = 0.25 + 0.50 * ((minutes_elapsed - 30) / 330)
+        else:
+            expected_pct = 0.75 + 0.25 * (min(minutes_elapsed - 360, 30) / 30)
+
         for s in candidates:
             change = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
 
-            if config.MOMENTUM_OPTIMAL_CHANGE_MIN <= change <= config.MOMENTUM_OPTIMAL_CHANGE_MAX:
+            # === 등락률 점수 (부드러운 곡선) ===
+            if change < 5.0:
+                change_score = 0.0
+            elif change < config.MOMENTUM_OPTIMAL_CHANGE_MIN:
+                change_score = 0.5 + 0.5 * (change - 5.0) / (config.MOMENTUM_OPTIMAL_CHANGE_MIN - 5.0)
+            elif change <= config.MOMENTUM_OPTIMAL_CHANGE_MAX:
                 change_score = 1.0
-            elif 5.0 <= change < config.MOMENTUM_OPTIMAL_CHANGE_MIN:
-                change_score = 0.7
-            elif config.MOMENTUM_OPTIMAL_CHANGE_MAX < change <= 22.0:
-                change_score = 0.6
+            elif change <= 22.0:
+                change_score = 1.0 - 0.5 * (change - config.MOMENTUM_OPTIMAL_CHANGE_MAX) / (22.0 - config.MOMENTUM_OPTIMAL_CHANGE_MAX)
+            elif change <= 29.5:
+                change_score = 0.5 - 0.2 * (change - 22.0) / 7.5
             else:
-                change_score = 0.3
+                change_score = 0.0  # 상한가 고정
 
+            # === 시간보정 거래량 점수 (ln 스케일) ===
             acml_vol = int(str(s.get("acml_vol", 0)).replace(",", "") or 0)
             daily = s.get("recent_daily_candles", [])
-            avg_vol = 1
+            prev_vol = 1
             if len(daily) >= 2:
-                prev_vol = int(str(daily[1].get("volume", 0)).replace(",", "") or 0)
-                avg_vol = max(prev_vol, 1)
+                prev_vol = max(int(str(daily[1].get("volume", 0)).replace(",", "") or 0), 1)
             elif daily:
-                prev_vol = int(str(daily[0].get("volume", 0)).replace(",", "") or 0)
-                avg_vol = max(prev_vol, 1)
-            vol_ratio = min(acml_vol / avg_vol, 15)
+                prev_vol = max(int(str(daily[0].get("volume", 0)).replace(",", "") or 0), 1)
 
+            expected_vol = prev_vol * max(expected_pct, 0.01)
+            raw_vol_ratio = acml_vol / max(expected_vol, 1)
+            vol_score = min(math.log(max(raw_vol_ratio, 1)) + 1, 5)  # ln, 1.0~5.0
+
+            # === 거래량 하드 게이트 ===
+            if vol_score < config.MOMENTUM_VOL_GATE:
+                s["momentum_score"] = 0
+                s["score"] = 0
+                s["trend_bonus"] = 0
+                s["score_detail"] = {
+                    "total": 0,
+                    "breakdown": f"거래량 부족 (vol_score {vol_score:.2f} < {config.MOMENTUM_VOL_GATE})",
+                }
+                continue
+
+            # === 고점유지 비율 ===
             current = int(str(s.get("stck_prpr", 0)).replace(",", "") or 0)
             today_high = int(str(s.get("stck_hgpr", 0)).replace(",", "") or 0)
             hold_ratio = current / today_high if today_high > 0 else 0.9
 
+            # === 추세 보너스 ===
             daily_full = s.get("daily_candles_full", [])
             trend_bonus = self._calc_trend_bonus(daily_full)
 
-            base_score = vol_ratio * change_score * hold_ratio * 10
+            # === 최종 스코어 ===
+            base_score = vol_score * change_score * hold_ratio * 20
             momentum_score = round(base_score * trend_bonus, 1)
             s["momentum_score"] = momentum_score
             s["score"] = int(momentum_score)
@@ -372,8 +406,8 @@ class MarketDataCollector:
                 "total": int(momentum_score),
                 "breakdown": (
                     f"모멘텀 {momentum_score} = "
-                    f"거래량비 {vol_ratio:.1f}x × 등락률 {change_score} × 고점유지 {hold_ratio:.2f} × 10"
-                    f" × 추세 {trend_bonus}"
+                    f"거래량 {vol_score:.2f} (보정{raw_vol_ratio:.1f}x) × 등락률 {change_score:.2f} "
+                    f"× 고점유지 {hold_ratio:.2f} × 20 × 추세 {trend_bonus}"
                 ),
             }
 
