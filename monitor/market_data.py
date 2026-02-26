@@ -31,6 +31,7 @@ class MarketDataCollector:
         self.naver_fin = naver_fin
         self.naver_news = naver_news
         self._kis_semaphore = Semaphore(3)
+        self.last_scan_summary = ""
 
     def is_market_open(self) -> bool:
         now = datetime.now(KST)
@@ -90,8 +91,11 @@ class MarketDataCollector:
         return []
 
     def enrich_momentum_candidates(self, stock_news: dict) -> list[dict]:
-        """모멘텀 후보를 소싱 → enrichment → 품질 검증 → 스코어링."""
+        """모멘텀 후보를 소싱 → enrichment → 품질 검증 → 스코어링.
+        결과와 별도로 self.last_scan_summary 에 스캔 요약 저장."""
+        self.last_scan_summary = ""
         if not config.MOMENTUM_ENABLED:
+            self.last_scan_summary = "모멘텀 비활성"
             return []
 
         now = datetime.now(KST)
@@ -101,30 +105,50 @@ class MarketDataCollector:
         entry_end = now.replace(hour=entry_end_h, minute=entry_end_m, second=0)
         if not (entry_start <= now <= entry_end):
             logger.info("모멘텀 진입 시간대 아님 (%s~%s)", config.MOMENTUM_ENTRY_START, config.MOMENTUM_ENTRY_END)
+            self.last_scan_summary = f"진입 시간대 아님 ({config.MOMENTUM_ENTRY_START}~{config.MOMENTUM_ENTRY_END})"
             return []
 
         raw = self._get_momentum_candidates()
         if not raw:
             logger.info("모멘텀 소싱 후보 0개")
+            self.last_scan_summary = "등락률 조건 충족 종목 0개 (소싱 결과 없음)"
             return []
 
         enriched = self._enrich_batch(raw[:config.ENRICHMENT_POOL_SIZE], stock_news, True)
 
         validated = []
+        rejected = []
         for s in enriched:
             name = s.get("hts_kor_isnm", "?")
-            if self._validate_momentum(s):
+            change = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
+            ok, reason = self._validate_momentum(s)
+            if ok:
                 s["is_momentum"] = True
                 validated.append(s)
             else:
-                logger.info("모멘텀 검증 탈락: %s", name)
-
+                rejected.append(f"  · {name} ({change:+.1f}%) — {reason}")
+                logger.info("모멘텀 검증 탈락: %s — %s", name, reason)
         if not validated:
             logger.info("모멘텀 품질 검증 통과 0개")
+            lines = [f"소싱 {len(enriched)}종목 → 검증 통과 0개"]
+            lines.extend(rejected[:5])
+            self.last_scan_summary = "\n".join(lines)
             return []
 
         logger.info("모멘텀 검증 통과: %d종목", len(validated))
         scored = self._score_momentum_candidates(validated)
+
+        # 스캔 요약 생성
+        summary_parts = [f"소싱 {len(enriched)}종목 → 검증 {len(validated)}개 통과"]
+        for s in scored[:3]:
+            sname = s.get("hts_kor_isnm", "?")
+            spct = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
+            sscore = s.get("momentum_score", 0)
+            summary_parts.append(f"  {sname} ({spct:+.1f}%, 스코어 {sscore:.1f})")
+        if rejected:
+            summary_parts.append(f"탈락 {len(rejected)}종목:")
+            summary_parts.extend(rejected[:3])
+        self.last_scan_summary = "\n".join(summary_parts)
         return scored
 
     def _enrich_batch(self, items: list[dict], stock_news: dict, is_market_open: bool) -> list[dict]:
@@ -227,7 +251,7 @@ class MarketDataCollector:
             logger.warning("모멘텀 소싱 실패: %s", e)
         return []
 
-    def _validate_momentum(self, stock: dict) -> bool:
+    def _validate_momentum(self, stock: dict) -> tuple[bool, str]:
         name = stock.get("hts_kor_isnm", "?")
         change_pct = float(str(stock.get("prdy_ctrt", "0")).replace(",", "") or "0")
 
@@ -239,14 +263,14 @@ class MarketDataCollector:
                 prev_change = (prev_close - prev_open) / prev_open * 100
                 if prev_change > config.MOMENTUM_PREV_DAY_MAX_CHANGE:
                     logger.info("모멘텀 제외 [전일 연속급등 %.1f%%]: %s", prev_change, name)
-                    return False
+                    return False, f"전일 연속급등 {prev_change:.1f}%"
 
         current = int(str(stock.get("stck_prpr", 0)).replace(",", "") or 0)
         today_open = int(str(stock.get("stck_oprc", 0)).replace(",", "") or 0)
         if today_open > 0 and current < today_open:
             logger.info("모멘텀 제외 [시가 하회 — 갭 실패]: %s (현재 %s < 시가 %s)",
                         name, f"{current:,}", f"{today_open:,}")
-            return False
+            return False, f"시가 하회 ({current:,} < 시가 {today_open:,})"
 
         today_high = int(str(stock.get("stck_hgpr", 0)).replace(",", "") or 0)
         if today_high > 0 and current > 0:
@@ -254,7 +278,7 @@ class MarketDataCollector:
             if high_ratio < config.MOMENTUM_MIN_HIGH_RATIO:
                 logger.info("모멘텀 제외 [고점 대비 %.1f%% — 이미 꺾임]: %s",
                             (1 - high_ratio) * 100, name)
-                return False
+                return False, f"고점 대비 {(1 - high_ratio) * 100:.1f}% 하락"
 
         m_candles = stock.get("minute_candles_5m", [])
         if len(m_candles) >= 2:
@@ -263,13 +287,13 @@ class MarketDataCollector:
             if vol_prev > 0 and vol_recent < vol_prev * config.MOMENTUM_VOL_SUSTAIN_RATIO:
                 logger.info("모멘텀 제외 [거래량 급감 %s→%s]: %s",
                             f"{vol_prev:,}", f"{vol_recent:,}", name)
-                return False
+                return False, f"거래량 급감 ({vol_prev:,}→{vol_recent:,})"
 
             low_recent = int(str(m_candles[0].get("low", 0)).replace(",", "") or 0)
             low_prev = int(str(m_candles[1].get("low", 0)).replace(",", "") or 0)
             if low_prev > 0 and low_recent > 0 and low_recent < low_prev * 0.995:
                 logger.info("모멘텀 제외 [저점 하락 — lower lows]: %s", name)
-                return False
+                return False, "저점 하락 (lower lows)"
 
         raw_tv = str(stock.get("acml_tr_pbmn", "0")).replace(",", "")
         trading_value = int(raw_tv) if raw_tv.isdigit() else 0
@@ -280,12 +304,12 @@ class MarketDataCollector:
         if 0 < trading_value < min_tv:
             logger.info("모멘텀 제외 [거래대금 %s 미만]: %s (%s)",
                         f"{min_tv / 1e8:.0f}억", name, f"{trading_value:,}")
-            return False
+            return False, f"거래대금 {min_tv / 1e8:.0f}억 미만"
 
         logger.info("모멘텀 검증 통과: %s (%.1f%%, 고점비 %.1f%%)",
                     name, change_pct,
                     (current / today_high * 100) if today_high > 0 else 0)
-        return True
+        return True, ""
 
     @staticmethod
     def _calc_trend_bonus(daily: list[dict]) -> float:

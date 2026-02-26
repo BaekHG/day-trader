@@ -195,12 +195,18 @@ def _is_late_session() -> bool:
     return now_kst() >= now_kst().replace(hour=hh, minute=mm, second=0)
 
 
+# 모멘텀 스캔 요약 (사이클 메시지에서 참조)
+_last_momentum_scan_summary = ""
+
 def _try_momentum_entry(
     kis: KISClient, bot: TelegramBot, db: Database,
     collector: MarketDataCollector, trader: Trader,
     monitor: PositionMonitor, sold_codes: set,
     market_data: dict,
 ) -> str | None:
+    global _last_momentum_scan_summary
+    _last_momentum_scan_summary = ""
+
     if not config.MOMENTUM_ENABLED:
         return None
 
@@ -238,6 +244,7 @@ def _try_momentum_entry(
         return None
 
     if not momentum_stocks:
+        _last_momentum_scan_summary = getattr(collector, 'last_scan_summary', '후보 없음')
         return None
 
     top = momentum_stocks[0]
@@ -250,6 +257,9 @@ def _try_momentum_entry(
     if m_score < min_score:
         logger.info("모멘텀 1위 스코어 부족: %s (%.1f, 최소 %d) — 스킵",
                     name, m_score, min_score)
+        scan_info = getattr(collector, 'last_scan_summary', '')
+        score_msg = f"1위 {name} 스코어 {m_score:.1f} < 최소 {min_score}"
+        _last_momentum_scan_summary = f"{score_msg}\n{scan_info}" if scan_info else score_msg
         return None
 
     logger.info("모멘텀 1위: %s (%.1f%%, 스코어 %.1f) — 풀백 진입 확인", name, change_pct, m_score)
@@ -662,10 +672,14 @@ def run_daily_cycle():
             # 매매비추천/필터탈락은 쿨다운 짧게 (시장 변화 빠르게 재확인)
             if exit_reason in ("no_picks", "opening_filtered", "low_confidence"):
                 cooldown = min(cooldown, 600)  # 최대 10분
-                bot.send_message(
+                scan_detail = _last_momentum_scan_summary
+                msg = (
                     f"⏸ 사이클 {cycle} — 진입 조건 미충족 ({exit_reason})\n"
                     f"{cooldown // 60}분 후 시장 재분석합니다."
                 )
+                if scan_detail:
+                    msg += f"\n\n🔍 <b>모멘텀 스캔 요약</b>\n{scan_detail}"
+                bot.send_message(msg)
             else:
                 bot.send_message(f"⏸ 사이클 {cycle} 완료 — {cooldown // 60}분 쿨다운")
             logger.info("쿨다운 %d초 시작 (사유: %s)", cooldown, exit_reason)
