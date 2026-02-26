@@ -159,6 +159,8 @@ EARLY_MOMENTUM_MIN_SCORE = int(os.getenv("EARLY_MOMENTUM_MIN_SCORE", "35"))  # �
 EARLY_MOMENTUM_VOL_GATE = float(os.getenv("EARLY_MOMENTUM_VOL_GATE", "1.5"))  # 거래량 게이트 1.5 (평시 2.0)
 EARLY_CYCLE_COOLDOWN = int(os.getenv("EARLY_CYCLE_COOLDOWN", "90"))  # 쿨다운 90초 (평시 180초)
 EARLY_FALLBACK_OPEN_TOLERANCE = float(os.getenv("EARLY_FALLBACK_OPEN_TOLERANCE", "0.005"))  # 시가 대비 0.5% 하회 허용
+EARLY_SKIP_PULLBACK_SCORE = int(os.getenv("EARLY_SKIP_PULLBACK_SCORE", "40"))  # 이 스코어 이상이면 풀백 없이 즉시 진입
+EARLY_SKIP_PULLBACK_HIGH_RATIO = float(os.getenv("EARLY_SKIP_PULLBACK_HIGH_RATIO", "0.97"))  # 고점 대비 97% 이상일 때만
 
 MARKET_INDEX_BLOCK_PCT = -1.0   # KOSDAQ 이 값 이하 시 모멘텀 진입 차단
 

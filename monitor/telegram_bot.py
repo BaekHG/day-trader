@@ -30,19 +30,27 @@ class TelegramBot:
     def send_message(self, text: str) -> bool:
         if not self.token or not self.chat_id:
             return False
-        if config.DRY_RUN and not text.startswith("[모의]"):
-            text = f"[모의] {text}"
+        if config.DRY_RUN and not text.startswith("[\uBAA8\uC758]"):
+            text = f"[\uBAA8\uC758] {text}"
         try:
-            for chunk in self._split(text, 4000):
+            for chunk in self._split(text, 2000):
                 resp = requests.post(
                     f"{self.base_url}/sendMessage",
                     json={"chat_id": self.chat_id, "text": chunk, "parse_mode": "HTML"},
                     timeout=10,
                 )
+                if resp.status_code == 400:
+                    # HTML \ud30c\uc2f1 \uc5d0\ub7ec \uc2dc plain text\ub85c \uc7ac\uc2dc\ub3c4
+                    logger.warning("\ud154\ub808\uadf8\ub7a8 HTML \ud30c\uc2f1 \uc2e4\ud328 \u2014 plain text\ub85c \uc7ac\uc2dc\ub3c4")
+                    resp = requests.post(
+                        f"{self.base_url}/sendMessage",
+                        json={"chat_id": self.chat_id, "text": chunk},
+                        timeout=10,
+                    )
                 resp.raise_for_status()
             return True
         except Exception as e:
-            logger.error("텔레그램 전송 실패: %s", e)
+            logger.error("\ud154\ub808\uadf8\ub7a8 \uc804\uc1a1 \uc2e4\ud328: %s", e)
             return False
 
     def start_polling(self, kis_client, monitor):

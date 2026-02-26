@@ -36,18 +36,29 @@ class Database:
     def _post(self, table: str, data: dict) -> bool:
         if not self.enabled:
             return False
+        payload = dict(data)
         for attempt in range(3):
             try:
                 resp = requests.post(
                     f"{self.url}/rest/v1/{table}",
                     headers=self.headers,
-                    json=data,
+                    json=payload,
                     timeout=15,
                 )
                 if resp.status_code in (200, 201):
                     return True
+                err_text = resp.text[:300]
                 logger.error("DB insert 실패 [%s] (시도 %d/3): %s %s",
-                            table, attempt + 1, resp.status_code, resp.text[:200])
+                            table, attempt + 1, resp.status_code, err_text)
+                # 컬럼 미존재 에러 시 해당 컬럼 제거 후 재시도
+                if "Could not find" in err_text and "column" in err_text:
+                    import re
+                    m = re.search(r"the '(\w+)' column", err_text)
+                    if m and m.group(1) in payload:
+                        removed = m.group(1)
+                        del payload[removed]
+                        logger.warning("DB 컬럼 '%s' 미존재 — 제거 후 재시도", removed)
+                        continue
                 if attempt < 2:
                     time.sleep(2 ** attempt)
             except Exception as e:

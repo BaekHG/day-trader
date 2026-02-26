@@ -274,20 +274,36 @@ def _try_momentum_entry(
         _last_momentum_scan_summary = f"{score_msg}\n{scan_info}" if scan_info else score_msg
         return None
 
-    logger.info("모멘텀 1위: %s (%.1f%%, 스코어 %.1f) — 풀백 진입 확인", name, change_pct, m_score)
+    # --- 초반 모드: 고스코어 + 고점 근처면 풀백 없이 즉시 진입 ---
+    skip_pullback = False
+    if early and m_score >= config.EARLY_SKIP_PULLBACK_SCORE:
+        high_ratio = top.get("_high_ratio", 0)
+        if high_ratio == 0:
+            today_high = int(str(top.get("stck_hgpr", 0)).replace(",", "") or 0)
+            cur = int(str(top.get("stck_prpr", 0)).replace(",", "") or 0)
+            high_ratio = cur / today_high if today_high > 0 else 0
+        if high_ratio >= config.EARLY_SKIP_PULLBACK_HIGH_RATIO:
+            skip_pullback = True
+            logger.info("초반 모드 즉시 진입: %s (스코어 %.1f, 고점비 %.1f%%) — 풀백 스킵",
+                        name, m_score, high_ratio * 100)
+
+    logger.info("모멘텀 1위: %s (%.1f%%, 스코어 %.1f) — %s",
+                name, change_pct, m_score,
+                "즉시 진입" if skip_pullback else "풀백 진입 확인")
     bot.send_message(
         f"🚀 <b>모멘텀 후보 발견</b>\n\n"
         f"{name} ({code})\n"
         f"등락률: {change_pct:+.1f}%\n"
         f"모멘텀 스코어: {m_score:.1f}\n"
-        f"풀백 진입 확인 중..."
+        f"{'⚡ 초반 즉시 진입' if skip_pullback else '풀백 진입 확인 중...'}"
     )
 
-    entry_ok, entry_reason = collector.check_momentum_entry(code)
-    if not entry_ok:
-        logger.info("모멘텀 풀백 미확인 — %s — 다음 사이클 재시도", entry_reason)
-        bot.send_message(f"⏳ {name} 풀백 진입 미충족\n사유: {entry_reason}")
-        return None
+    if not skip_pullback:
+        entry_ok, entry_reason = collector.check_momentum_entry(code)
+        if not entry_ok:
+            logger.info("모멘텀 풀백 미확인 — %s — 다음 사이클 재시도", entry_reason)
+            bot.send_message(f"⏳ {name} 풀백 진입 미충족\n사유: {entry_reason}")
+            return None
 
     try:
         price_data = kis.get_current_price(code)
