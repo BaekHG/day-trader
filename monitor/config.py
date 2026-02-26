@@ -36,7 +36,7 @@ TRAILING_STOP_LEVELS = [
 
 # --- 멀티사이클 ---
 MAX_CYCLES = int(os.getenv("MAX_CYCLES", "10"))
-NO_NEW_ENTRY_AFTER = "14:30"   # 14:30 이후 신규 진입 차단 (15:10 강제청산 전)
+NO_NEW_ENTRY_AFTER = os.getenv("NO_NEW_ENTRY_AFTER", "10:30")  # 10:30 이후 신규 진입 차단
 FORCE_CLOSE_TIME = "15:10"     # 전량 강제 청산
 CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "180"))  # 사이클 간 쿨다운 (초)
 
@@ -65,9 +65,13 @@ MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "30"))
 
 # --- 일일 리스크 관리 (보수적) ---
 DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "-1.5"))
-DAILY_PROFIT_TARGET_PCT = float(os.getenv("DAILY_PROFIT_TARGET_PCT", "2.0"))
+DAILY_PROFIT_TARGET_PCT = float(os.getenv("DAILY_PROFIT_TARGET_PCT", "5.0"))  # 일일 누적 수익 상한 (안전망)
 MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2"))  # 연패 시 당일 중단
 MIN_CONFIDENCE_AFTER_LOSS = int(os.getenv("MIN_CONFIDENCE_AFTER_LOSS", "75"))  # 손절 후 다음 사이클 최소 신뢰도
+
+# --- 사이클별 분기 전략 ---
+FIRST_PROFIT_STOP_PCT = float(os.getenv("FIRST_PROFIT_STOP_PCT", "3.0"))  # 단일 거래 +3% 이상 → 당일 종료
+AFTER_LOSS_MIN_SCORE = int(os.getenv("AFTER_LOSS_MIN_SCORE", "65"))  # 손절 후 다음 진입 최소 모멘텀 스코어
 
 MIN_REINVEST_CASH = int(os.getenv("MIN_REINVEST_CASH", "200000"))
 REINVEST_CHECK_INTERVAL = int(os.getenv("REINVEST_CHECK_INTERVAL", "300"))

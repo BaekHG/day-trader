@@ -209,6 +209,7 @@ def _try_momentum_entry(
     collector: MarketDataCollector, trader: Trader,
     monitor: PositionMonitor, sold_codes: set,
     market_data: dict,
+    consecutive_losses: int = 0,
 ) -> str | None:
     global _last_momentum_scan_summary
     _last_momentum_scan_summary = ""
@@ -266,6 +267,10 @@ def _try_momentum_entry(
         min_score = config.EARLY_MOMENTUM_MIN_SCORE
     else:
         min_score = config.MOMENTUM_MIN_SCORE
+    # 손절 후 다음 진입: 최소 스코어 강화
+    if consecutive_losses > 0:
+        min_score = max(min_score, config.AFTER_LOSS_MIN_SCORE)
+        logger.info("손절 후 안전 모드: 최소 스코어 %d 적용 (%d연패)", min_score, consecutive_losses)
     if m_score < min_score:
         logger.info("모멘텀 1위 스코어 부족: %s (%.1f, 최소 %d) — 스킵",
                     name, m_score, min_score)
@@ -680,11 +685,22 @@ def run_daily_cycle():
 
         new_trades = monitor.trades_today[trades_before:]
         if new_trades:
-            last_pnl = new_trades[-1].get("pnl_amt", 0)
+            last_trade = new_trades[-1]
+            last_pnl = last_trade.get("pnl_amt", 0)
+            last_pnl_pct = last_trade.get("pnl_pct", 0)
             if last_pnl < 0:
                 consecutive_losses += 1
             else:
                 consecutive_losses = 0
+                # 단일 거래 수익 +N% 이상 → 당일 종료 (돈 지킨다)
+                if last_pnl_pct >= config.FIRST_PROFIT_STOP_PCT:
+                    logger.info("수익 확보 +%.1f%% → 당일 매매 종료", last_pnl_pct)
+                    bot.send_message(
+                        f"🎯 <b>수익 확보 — 당일 매매 종료</b>\n\n"
+                        f"수익률: {last_pnl_pct:+.1f}% ({last_pnl:+,}원)\n"
+                        f"돈 지킵니다. 내일 또 보곜요. 💪"
+                    )
+                    break
 
         # 재시도 가능한 결과: 쿨다운 후 다음 사이클
         retryable = ("no_picks", "opening_filtered", "low_confidence", "positions_cleared")
@@ -871,6 +887,7 @@ def _run_one_cycle(
     if not monitor.positions:
         momentum_result = _try_momentum_entry(
             kis, bot, db, collector, trader, monitor, sold_codes, market_data,
+            consecutive_losses=consecutive_losses,
         )
         if momentum_result == "momentum_entered":
             logger.info("모멘텀 진입 성공 — 모니터링 전환")
