@@ -174,6 +174,33 @@ EARLY_SKIP_PULLBACK_HIGH_RATIO = float(os.getenv("EARLY_SKIP_PULLBACK_HIGH_RATIO
 
 MARKET_INDEX_BLOCK_PCT = -1.0   # KOSDAQ 이 값 이하 시 모멘텀 진입 차단
 
+
+# --- 불장 모드 (Market Boost) — 시장 강세/호재 뉴스 감지 시 공격적 파라미터 ---
+BOOST_ENABLED = os.getenv("BOOST_ENABLED", "true").lower() == "true"
+SENTIMENT_TIME = os.getenv("SENTIMENT_TIME", "08:55")  # 장 시작 5분 전 뉴스 센티먼트 분석
+BOOST_KOSPI_THRESHOLD = float(os.getenv("BOOST_KOSPI_THRESHOLD", "1.0"))  # KOSPI +1%↑ → 부스트 후보
+BOOST_KOSDAQ_THRESHOLD = float(os.getenv("BOOST_KOSDAQ_THRESHOLD", "1.5"))  # KOSDAQ +1.5%↑ → 부스트 후보
+BOOST_CONFIRM_MINUTES = int(os.getenv("BOOST_CONFIRM_MINUTES", "8"))  # 09:02 감지 후 8분간 유지 확인
+BOOST_MAX_POSITION_PCT = int(os.getenv("BOOST_MAX_POSITION_PCT", "95"))  # 포지션 95%
+BOOST_MOMENTUM_MIN_SCORE = int(os.getenv("BOOST_MOMENTUM_MIN_SCORE", "35"))  # 최소 스코어 35
+BOOST_STOP_LOSS_PCT = float(os.getenv("BOOST_STOP_LOSS_PCT", "3.5"))  # 손절 -3.5% (숨 여유)
+BOOST_FIRST_PROFIT_STOP_PCT = float(os.getenv("BOOST_FIRST_PROFIT_STOP_PCT", "5.0"))  # +5% 이상 시 종료
+BOOST_NO_NEW_ENTRY_AFTER = os.getenv("BOOST_NO_NEW_ENTRY_AFTER", "13:00")  # 오후 1시까지 신규 진입 허용
+BOOST_CYCLE_COOLDOWN = int(os.getenv("BOOST_CYCLE_COOLDOWN", "90"))  # 쿨다운 90초
+BOOST_DAILY_PROFIT_TARGET_PCT = float(os.getenv("BOOST_DAILY_PROFIT_TARGET_PCT", "8.0"))  # 일일 수익 상한 8%
+BOOST_THEME_SCORE_BONUS = float(os.getenv("BOOST_THEME_SCORE_BONUS", "1.2"))  # 수혜테마 종목 스코어 +20%
+BOOST_THEME_SCORE_PENALTY = float(os.getenv("BOOST_THEME_SCORE_PENALTY", "0.85"))  # 피해테마 종목 스코어 -15%
+# 불장 모드 트레일링 스탑 (넓은 숨 여유 — 최대한 늦게, 높을 때 매도)
+BOOST_MOMENTUM_TRAILING_STOP_LEVELS = [
+    (15.0, 12.0),   # +15% 찍으면 최소 +12% 확보 (3% 여유)
+    (10.0, 7.0),    # +10% 찍으면 최소 +7% 확보 (3% 여유)
+    (7.0, 4.0),     # +7%  찍으면 최소 +4% 확보 (3% 여유)
+    (5.0, 2.5),     # +5%  찍으면 최소 +2.5% 확보 (2.5% 여유)
+    (3.0, 0.5),     # +3%  찍으면 최소 +0.5% 확보 (수수료 커버)
+]
+BOOST_TIME_STOP_MINUTES = int(os.getenv("BOOST_TIME_STOP_MINUTES", "40"))  # 횡보 청산 40분 (평시 20분)
+BOOST_TIME_STOP_MIN_PROFIT = float(os.getenv("BOOST_TIME_STOP_MIN_PROFIT", "0.3"))  # 40분 후 +0.3% 미만이면 청산
+
 # --- 거래대금 필터 (가격대별 차등) ---
 # 저가주는 거래대금 기준을 낮춰 아이티켐(1~2만원대) 같은 중소형 급등주도 포착
 MIN_TRADING_VALUE_TIERS = [

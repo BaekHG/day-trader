@@ -205,6 +205,96 @@ def _is_early_morning() -> bool:
 _last_momentum_scan_summary = ""
 _morning_top_movers: list[dict] = []  # 오전 급등주 추적
 
+# --- 불장 모드 (Market Boost) 상태 ---
+_boost_state = {
+    "active": False,
+    "sentiment": "neutral",
+    "boost_themes": [],
+    "hurt_themes": [],
+    "confidence": 0,
+    "reason": "",
+}
+
+
+def _run_sentiment_check(naver_news, analyzer, bot):
+    """08:55 뉴스 센티먼트 분석 (장 시작 전 사전 판단)."""
+    global _boost_state
+    headlines = naver_news.get_market_news()
+    if not headlines:
+        bot.send_message("📰 시장 뉴스 수집 실패 — 센티먼트 분석 스킵")
+        return
+    result = analyzer.analyze_market_sentiment(headlines)
+    _boost_state["sentiment"] = result.get("sentiment", "neutral")
+    _boost_state["boost_themes"] = result.get("boost_themes", [])
+    _boost_state["hurt_themes"] = result.get("hurt_themes", [])
+    _boost_state["confidence"] = result.get("confidence", 0)
+    # confidence 70 미만이면 neutral 강제 — 저신뢰 판단으로 부스트 방지
+    if _boost_state["confidence"] < 70 and _boost_state["sentiment"] != "neutral":
+        logger.info("센티먼트 신뢰도 부족 (%d < 70) — %s → neutral 강제",
+                    _boost_state["confidence"], _boost_state["sentiment"])
+        _boost_state["sentiment"] = "neutral"
+    summary = result.get("summary", "")
+
+    sentiment = _boost_state["sentiment"]
+    conf = _boost_state["confidence"]
+    themes = ", ".join(_boost_state["boost_themes"][:5]) or "없음"
+    hurt = ", ".join(_boost_state["hurt_themes"][:5]) or "없음"
+    emoji = "🔥" if sentiment == "bullish" else "❄️" if sentiment == "bearish" else "➖"
+    bot.send_message(
+        f"{emoji} <b>시장 센티먼트 분석</b>\n\n"
+        f"판단: {sentiment} (신뢰도 {conf}%)\n"
+        f"수혜테마: {themes}\n"
+        f"피해테마: {hurt}\n"
+        f"요약: {summary}"
+    )
+    logger.info("센티먼트: %s (conf=%d) themes=%s hurt=%s",
+                sentiment, conf, themes, hurt)
+
+
+def _confirm_boost_from_index(market_data: dict, bot):
+    """KOSPI/KOSDAQ 지표로 부스트 최종 확정.
+
+    뉴스 bullish + 지표 강세 → 확정
+    뉴스 bullish + 지표 약세 → 평시
+    뉴스 neutral + 지표 강세 → 확정 (돈은 안 거짓말)
+    """
+    global _boost_state
+    kospi = market_data.get("kospi_index", {})
+    kosdaq = market_data.get("kosdaq_index", {})
+    kospi_chg = float(kospi.get("change_rate", "0") if isinstance(kospi, dict) else "0")
+    kosdaq_chg = float(kosdaq.get("change_rate", "0") if isinstance(kosdaq, dict) else "0")
+
+    index_strong = (
+        kospi_chg >= config.BOOST_KOSPI_THRESHOLD
+        or kosdaq_chg >= config.BOOST_KOSDAQ_THRESHOLD
+    )
+    sentiment = _boost_state["sentiment"]
+
+    if sentiment == "bullish" and index_strong:
+        _boost_state["active"] = True
+        _boost_state["reason"] = f"뉴스 bullish + 지표 강세 (KOSPI {kospi_chg:+.1f}%, KOSDAQ {kosdaq_chg:+.1f}%)"
+    elif sentiment == "neutral" and index_strong:
+        _boost_state["active"] = True
+        _boost_state["reason"] = f"지표 강세 감지 (KOSPI {kospi_chg:+.1f}%, KOSDAQ {kosdaq_chg:+.1f}%) — 돈은 안 거짓말"
+    else:
+        _boost_state["active"] = False
+        _boost_state["reason"] = f"평시 유지 (sentiment={sentiment}, KOSPI {kospi_chg:+.1f}%, KOSDAQ {kosdaq_chg:+.1f}%)"
+
+    if _boost_state["active"]:
+        bot.send_message(
+            f"🚀 <b>불장 모드 확정!</b>\n\n"
+            f"사유: {_boost_state['reason']}\n"
+            f"MAX_POSITION: {config.BOOST_MAX_POSITION_PCT}% | "
+            f"MIN_SCORE: {config.BOOST_MOMENTUM_MIN_SCORE} | "
+            f"STOP_LOSS: -{config.BOOST_STOP_LOSS_PCT}%\n"
+            f"NO_NEW_ENTRY: {config.BOOST_NO_NEW_ENTRY_AFTER} | "
+            f"COOLDOWN: {config.BOOST_CYCLE_COOLDOWN}s"
+        )
+    else:
+        bot.send_message(f"⚖️ 평시 모드 — {_boost_state['reason']}")
+    logger.info("부스트 가부: %s — %s", _boost_state['active'], _boost_state['reason'])
+
+
 def _try_momentum_entry(
     kis: KISClient, bot: TelegramBot, db: Database,
     collector: MarketDataCollector, trader: Trader,
@@ -285,8 +375,11 @@ def _try_momentum_entry(
     m_score = top.get("momentum_score", 0)
 
     early = _is_early_morning()
+    boosted = _boost_state["active"]
     if late:
         min_score = config.LATE_SESSION_MIN_SCORE
+    elif boosted:
+        min_score = config.BOOST_MOMENTUM_MIN_SCORE
     elif early:
         min_score = config.EARLY_MOMENTUM_MIN_SCORE
     else:
@@ -352,7 +445,12 @@ def _try_momentum_entry(
     except Exception:
         available_cash = config.TOTAL_CAPITAL
 
-    pos_pct = config.LATE_SESSION_POSITION_PCT if late else config.MAX_POSITION_PCT
+    if boosted:
+        pos_pct = config.BOOST_MAX_POSITION_PCT
+    elif late:
+        pos_pct = config.LATE_SESSION_POSITION_PCT
+    else:
+        pos_pct = config.MAX_POSITION_PCT
     position_cash = int(available_cash * pos_pct / 100)
     quantity = position_cash // cur_price
     if quantity <= 0:
@@ -361,6 +459,8 @@ def _try_momentum_entry(
 
     if late:
         stop_pct = config.LATE_SESSION_STOP_LOSS_PCT
+    elif boosted:
+        stop_pct = config.BOOST_STOP_LOSS_PCT
     else:
         stop_pct = config.MOMENTUM_STOP_LOSS_PCT
         for score_threshold, pct in config.MOMENTUM_STOP_LOSS_BY_SCORE:
@@ -611,7 +711,8 @@ def _try_pullback_entry(
     return None
 
 def _past_entry_cutoff() -> bool:
-    hh, mm = map(int, config.NO_NEW_ENTRY_AFTER.split(":"))
+    cutoff = config.BOOST_NO_NEW_ENTRY_AFTER if _boost_state["active"] else config.NO_NEW_ENTRY_AFTER
+    hh, mm = map(int, cutoff.split(":"))
     n = now_kst()
     return n.hour > hh or (n.hour == hh and n.minute >= mm)
 
@@ -825,6 +926,11 @@ def run_daily_cycle():
             _send_daily_report(monitor, bot, db)
             return bot
 
+    # --- 불장 모드: 08:55 센티먼트 분석 ---
+    if config.BOOST_ENABLED and not past_analysis_time() and not config.DRY_RUN:
+        wait_until(config.SENTIMENT_TIME, bot, kis, monitor)
+        _run_sentiment_check(naver_news, analyzer, bot)
+
     if not past_analysis_time() and not config.DRY_RUN:
         wait_until(config.ANALYSIS_TIME, bot, kis, monitor)
 
@@ -839,7 +945,8 @@ def run_daily_cycle():
             logger.info("일일 손실한도 도달 (%.1f%%) — 사이클 중단", daily_pnl)
             bot.send_message(f"🛑 일일 손실한도 도달 ({daily_pnl:.1f}%) — 매매 중단")
             break
-        if daily_pnl >= config.DAILY_PROFIT_TARGET_PCT:
+        profit_target = config.BOOST_DAILY_PROFIT_TARGET_PCT if _boost_state["active"] else config.DAILY_PROFIT_TARGET_PCT
+        if daily_pnl >= profit_target:
             logger.info("일일 수익목표 달성 (%.1f%%) — 사이클 중단", daily_pnl)
             bot.send_message(f"🎯 일일 수익목표 달성 ({daily_pnl:.1f}%) — 매매 중단")
             break
@@ -867,7 +974,8 @@ def run_daily_cycle():
             else:
                 consecutive_losses = 0
                 # 단일 거래 수익 +N% 이상 → 당일 종료 (돈 지킨다)
-                if last_pnl_pct >= config.FIRST_PROFIT_STOP_PCT:
+                profit_stop = config.BOOST_FIRST_PROFIT_STOP_PCT if _boost_state["active"] else config.FIRST_PROFIT_STOP_PCT
+                if last_pnl_pct >= profit_stop:
                     logger.info("수익 확보 +%.1f%% → 당일 매매 종료", last_pnl_pct)
                     bot.send_message(
                         f"🎯 <b>수익 확보 — 당일 매매 종료</b>\n\n"
@@ -887,7 +995,12 @@ def run_daily_cycle():
 
         if not _past_entry_cutoff() and cycle < config.MAX_CYCLES:
             early = _is_early_morning()
-            cooldown = config.EARLY_CYCLE_COOLDOWN if early else config.CYCLE_COOLDOWN
+            if _boost_state["active"]:
+                cooldown = config.BOOST_CYCLE_COOLDOWN
+            elif early:
+                cooldown = config.EARLY_CYCLE_COOLDOWN
+            else:
+                cooldown = config.CYCLE_COOLDOWN
             # 매매비추천/필터탈락은 쿨다운 짧게 (시장 변화 빠르게 재확인)
             if exit_reason in ("no_picks", "opening_filtered", "low_confidence"):
                 cooldown = min(cooldown, 600)  # 최대 10분
@@ -1013,6 +1126,10 @@ def _run_one_cycle(
         logger.error("시장 데이터 수집 실패: %s", e)
         bot.send_message(f"시장 데이터 수집 실패: {e}")
         return "error"
+
+    # 첫 사이클: KOSPI/KOSDAQ 지표로 부스트 최종 확정
+    if cycle == 1 and config.BOOST_ENABLED and _boost_state["sentiment"] != "":
+        _confirm_boost_from_index(market_data, bot)
 
     phase_label = "오후" if phase == "afternoon" else "오전"
     logger.info("Phase 2 — 종목 심층 데이터 수집 (%s)", phase_label)
