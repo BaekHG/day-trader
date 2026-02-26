@@ -20,7 +20,7 @@ from market_data import MarketDataCollector
 from monitor import PositionMonitor
 from naver_data import NaverFinanceService, NaverNewsService
 from telegram_bot import TelegramBot
-from trader import Trader
+from trader import Trader, round_to_tick
 
 KST = pytz.timezone("Asia/Seoul")
 
@@ -302,7 +302,7 @@ def _try_momentum_entry(
     stop_loss = int(cur_price * (1 - stop_pct / 100))
 
     # 모멘텀: 상한 지정가 (현재가 + 1% 버퍼) — 빠른 체결 + 슬리피지 제한
-    order_price = int(cur_price * 1.01)
+    order_price = round_to_tick(int(cur_price * 1.01))
     quantity = position_cash // order_price  # 상한가 기준 수량 재계산
     if quantity <= 0:
         logger.info("모멘텀 주문 가능 수량 0주 (버퍼 적용 후) — 스킵")
