@@ -301,24 +301,33 @@ def _try_momentum_entry(
                 break
     stop_loss = int(cur_price * (1 - stop_pct / 100))
 
+    # 모멘텀: 상한 지정가 (현재가 + 1% 버퍼) — 빠른 체결 + 슬리피지 제한
+    order_price = int(cur_price * 1.01)
+    quantity = position_cash // order_price  # 상한가 기준 수량 재계산
+    if quantity <= 0:
+        logger.info("모멘텀 주문 가능 수량 0주 (버퍼 적용 후) — 스킵")
+        return None
+
     order = {
         "stock_code": code,
         "name": name,
-        "price": cur_price,
+        "price": order_price,
         "quantity": quantity,
-        "amount": quantity * cur_price,
+        "amount": quantity * order_price,
         "reason": f"모멘텀 진입 ({change_pct:+.1f}%, 스코어 {m_score:.1f})",
         "target1": int(cur_price * 1.05),
         "target2": int(cur_price * 1.10),
         "stop_loss": stop_loss,
         "score": int(m_score),
         "sell_strategy": {"breakoutHold": "모멘텀 트레일링", "breakoutFail": "갭실패 즉시청산"},
+        "is_momentum": True,
     }
 
     bot.send_message(
         f"🚀 <b>모멘텀 매수 진행</b>\n\n"
-        f"{name} {quantity}주 × {cur_price:,}원\n"
-        f"투입금: {quantity * cur_price:,}원 (자본 {pos_pct}%)\n"
+        f"{name} {quantity}주 × {order_price:,}원 (상한지정가)\n"
+        f"현재가: {cur_price:,}원 / 버퍼: +1%\n"
+        f"투입금: {quantity * order_price:,}원 (자본 {pos_pct}%)\n"
         f"손절선: {stop_loss:,}원 (-{stop_pct}%)"
     )
 

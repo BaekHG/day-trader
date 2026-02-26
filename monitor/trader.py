@@ -112,16 +112,25 @@ class Trader:
                     continue
 
                 if current_price != ai_price:
-                        logger.info(
-                            "%s 주문가 조정: AI %s → 현재가 %s (%.1f%%)",
-                            order["name"], f"{ai_price:,}", f"{current_price:,}", deviation_pct,
-                        )
-                        order["price"] = current_price
-                        order["quantity"] = int(order["amount"] // current_price) if current_price > 0 else order["quantity"]
+                        if order.get("is_momentum"):
+                            # 모멘텀: 최신 현재가 기준 +1% 상한 지정가 유지
+                            adjusted_price = int(current_price * 1.01)
+                            logger.info(
+                                "%s 모멘텀 상한지정가 갱신: %s → %s (현재가 %s +1%%)",
+                                order["name"], f"{ai_price:,}", f"{adjusted_price:,}", f"{current_price:,}",
+                            )
+                        else:
+                            adjusted_price = current_price
+                            logger.info(
+                                "%s 주문가 조정: AI %s → 현재가 %s (%.1f%%)",
+                                order["name"], f"{ai_price:,}", f"{current_price:,}", deviation_pct,
+                            )
+                        order["price"] = adjusted_price
+                        order["quantity"] = int(order["amount"] // adjusted_price) if adjusted_price > 0 else order["quantity"]
                         if order["quantity"] < 1:
                             results.append({**order, "success": False, "message": "현재가 기준 수량 부족"})
                             continue
-                        order["amount"] = order["quantity"] * current_price
+                        order["amount"] = order["quantity"] * adjusted_price
 
                         # 손절가도 현재가 기준으로 재계산
                         if ai_price > 0 and order.get("stop_loss", 0) > 0:
