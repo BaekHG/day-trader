@@ -130,10 +130,20 @@ class PositionMonitor:
                     pos["name"], f"{current:,}", pnl_pct, f"{target_price:,}", remaining)
                 continue  # Skip trailing stop for pullback
 
-            trailing_levels = (
-                config.MOMENTUM_TRAILING_STOP_LEVELS if is_momentum
-                else config.TRAILING_STOP_LEVELS
-            )
+            # 불장 모드 확인 (순환 import 회피)
+            _boosted = False
+            try:
+                import main as _main_mod
+                _boosted = getattr(_main_mod, "_boost_state", {}).get("active", False)
+            except Exception:
+                pass
+
+            if is_momentum and _boosted:
+                trailing_levels = config.BOOST_MOMENTUM_TRAILING_STOP_LEVELS
+            elif is_momentum:
+                trailing_levels = config.MOMENTUM_TRAILING_STOP_LEVELS
+            else:
+                trailing_levels = config.TRAILING_STOP_LEVELS
 
             effective_stop = pos["stop_loss"]
             high_pnl = (pos["high_since_entry"] - entry) / entry * 100 if entry else 0
@@ -152,7 +162,10 @@ class PositionMonitor:
                 continue
 
             pos_phase = pos.get("phase", "morning")
-            if is_momentum:
+            if is_momentum and _boosted:
+                max_hold = config.BOOST_TIME_STOP_MINUTES
+                min_profit_for_hold = config.BOOST_TIME_STOP_MIN_PROFIT
+            elif is_momentum:
                 max_hold = config.MOMENTUM_TIME_STOP_MINUTES
                 min_profit_for_hold = config.MOMENTUM_TIME_STOP_MIN_PROFIT
             elif pos_phase == "afternoon":

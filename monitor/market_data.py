@@ -436,6 +436,34 @@ class MarketDataCollector:
             # === 최종 스코어 ===
             base_score = vol_score * change_score * hold_ratio * 20
             momentum_score = round(base_score * trend_bonus, 1)
+
+            # === 불장 모드: 테마 보너스/패널티 ===
+            theme_multiplier = 1.0
+            theme_label = ""
+            try:
+                import main as _main_mod
+                bs = getattr(_main_mod, "_boost_state", {})
+                if bs.get("active"):
+                    name = s.get("hts_kor_isnm", "")
+                    news = s.get("news_headlines", [])
+                    text_blob = name + " " + " ".join(
+                        n.get("title", "") if isinstance(n, dict) else str(n) for n in news[:5]
+                    )
+                    for theme in bs.get("boost_themes", []):
+                        if theme and theme in text_blob:
+                            theme_multiplier = config.BOOST_THEME_SCORE_BONUS
+                            theme_label = f"수혜({theme})×{theme_multiplier}"
+                            break
+                    if theme_multiplier == 1.0:
+                        for theme in bs.get("hurt_themes", []):
+                            if theme and theme in text_blob:
+                                theme_multiplier = config.BOOST_THEME_SCORE_PENALTY
+                                theme_label = f"피해({theme})×{theme_multiplier}"
+                                break
+            except Exception:
+                pass
+            momentum_score = round(momentum_score * theme_multiplier, 1)
+
             s["momentum_score"] = momentum_score
             s["score"] = int(momentum_score)
             s["trend_bonus"] = trend_bonus
@@ -445,6 +473,7 @@ class MarketDataCollector:
                     f"모멘텀 {momentum_score} = "
                     f"거래량 {vol_score:.2f} (보정{raw_vol_ratio:.1f}x) × 등락률 {change_score:.2f} "
                     f"× 고점유지 {hold_ratio:.2f} × 20 × 추세 {trend_bonus}"
+                    + (f" × {theme_label}" if theme_label else "")
                 ),
             }
 
