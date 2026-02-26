@@ -99,6 +99,37 @@ class PositionMonitor:
                     )
                     continue
 
+
+            # 눌림목 포지션: 고정 목표가 + 빠른 손절
+            is_pullback = pos.get("phase") == "pullback"
+            if is_pullback:
+                sell_strategy = pos.get("sell_strategy", {})
+                target_pct = sell_strategy.get("target_pct", config.PULLBACK_TARGET_PCT)
+                target_price = int(entry * (1 + target_pct / 100))
+
+                if current >= target_price:
+                    self._execute_sell(code, pos, remaining, current,
+                        f"눌림목 목표 달성 +{target_pct}%", pnl_pct)
+                    continue
+
+                pullback_stop = int(entry * (1 - config.PULLBACK_STOP_LOSS_PCT / 100))
+                if current <= pullback_stop:
+                    self._execute_sell(code, pos, remaining, current, "눌림목 손절", pnl_pct)
+                    continue
+
+                pb_entry_time = pos.get("entry_time", "")
+                if pb_entry_time:
+                    pb_dt = datetime.fromisoformat(pb_entry_time)
+                    pb_hold = (now - pb_dt).total_seconds() / 60
+                    if pb_hold >= config.AFTERNOON_MAX_HOLD_MINUTES and pnl_pct < 1.0:
+                        self._execute_sell(code, pos, remaining, current,
+                            f"눌림목 {config.AFTERNOON_MAX_HOLD_MINUTES}분 횡보", pnl_pct)
+                        continue
+
+                logger.info("눌림목 %s | %s원 (%.1f%%) | 목표 %s | 잔량 %d주",
+                    pos["name"], f"{current:,}", pnl_pct, f"{target_price:,}", remaining)
+                continue  # Skip trailing stop for pullback
+
             trailing_levels = (
                 config.MOMENTUM_TRAILING_STOP_LEVELS if is_momentum
                 else config.TRAILING_STOP_LEVELS

@@ -203,6 +203,7 @@ def _is_early_morning() -> bool:
 
 # 모멘텀 스캔 요약 (사이클 메시지에서 참조)
 _last_momentum_scan_summary = ""
+_morning_top_movers: list[dict] = []  # 오전 급등주 추적
 
 def _try_momentum_entry(
     kis: KISClient, bot: TelegramBot, db: Database,
@@ -249,6 +250,29 @@ def _try_momentum_entry(
     except Exception as e:
         logger.warning("모멘텀 소싱 실패: %s", e)
         return None
+
+    # 오전 급등주 추적 (오후 눌림목 대상)
+    global _morning_top_movers
+    for s in momentum_stocks[:5]:
+        s_code = s.get("mksc_shrn_iscd", "")
+        s_change = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
+        s_high = int(str(s.get("stck_hgpr", 0)).replace(",", "") or 0)
+        s_cur = int(str(s.get("stck_prpr", 0)).replace(",", "") or 0)
+        s_prev_close = int(s_cur / (1 + s_change / 100)) if s_change > 0 and s_cur > 0 else 0
+        if s_change >= config.PULLBACK_MIN_MORNING_CHANGE:
+            existing = next((m for m in _morning_top_movers if m["code"] == s_code), None)
+            if existing:
+                if s_high > existing["morning_high"]:
+                    existing["morning_high"] = s_high
+                    existing["morning_high_pct"] = s_change
+            else:
+                _morning_top_movers.append({
+                    "code": s_code,
+                    "name": s.get("hts_kor_isnm", "?"),
+                    "morning_high": s_high,
+                    "morning_high_pct": s_change,
+                    "prev_close": s_prev_close,
+                })
 
     if not momentum_stocks:
         _last_momentum_scan_summary = getattr(collector, 'last_scan_summary', '후보 없음')
@@ -435,6 +459,156 @@ def _try_momentum_entry(
 
     return None
 
+def _try_pullback_entry(
+    kis: KISClient, bot: TelegramBot, db: Database,
+    trader: Trader, monitor: PositionMonitor,
+    sold_codes: set,
+) -> str | None:
+    """오후 눌림목 반등 진입."""
+    global _morning_top_movers
+
+    if not _morning_top_movers:
+        logger.info("눌림목 — 오전 급등주 기록 없음")
+        return None
+
+    if monitor.positions:
+        return None
+
+    logger.info("눌림목 스캔 — 오전 급등주 %d종목 확인", len(_morning_top_movers))
+
+    for mover in _morning_top_movers:
+        code = mover["code"]
+        name = mover["name"]
+        morning_high = mover["morning_high"]
+        prev_close = mover["prev_close"]
+
+        if code in sold_codes:
+            logger.info("눌림목 제외 [오늘 손절 종목]: %s", name)
+            continue
+
+        try:
+            price_data = kis.get_current_price(code)
+            current = price_data["price"]
+            today_low = price_data.get("low", 0)
+        except Exception as e:
+            logger.warning("눌림목 가격 조회 실패 %s: %s", name, e)
+            continue
+
+        if current <= 0 or morning_high <= 0 or prev_close <= 0:
+            continue
+
+        # 되돌림 비율: (고점-현재) / (고점-전일종가)
+        rise = morning_high - prev_close
+        if rise <= 0:
+            continue
+        retracement = (morning_high - current) / rise
+
+        if retracement < config.PULLBACK_RETRACEMENT_MIN:
+            logger.info("눌림목 제외 [되돌림 부족 %.0f%%]: %s", retracement * 100, name)
+            continue
+        if retracement > config.PULLBACK_RETRACEMENT_MAX:
+            logger.info("눌림목 제외 [과다 하락 %.0f%%]: %s", retracement * 100, name)
+            continue
+
+        # 전일 대비 아직 플러스인지
+        change_pct = (current - prev_close) / prev_close * 100
+        if change_pct <= 0:
+            logger.info("눌림목 제외 [전일 대비 마이너스]: %s (%.1f%%)", name, change_pct)
+            continue
+
+        # 반등 확인
+        if today_low > 0:
+            bounce = (current - today_low) / today_low * 100
+            if bounce < config.PULLBACK_BOUNCE_CONFIRM_PCT:
+                logger.info("눌림목 제외 [반등 미확인 %.1f%%]: %s", bounce, name)
+                continue
+
+        logger.info("눌림목 진입 대상: %s (되돌림 %.0f%%, 현재 %s)",
+                    name, retracement * 100, f"{current:,}")
+
+        try:
+            available_cash = kis.get_available_cash()
+        except Exception:
+            available_cash = config.TOTAL_CAPITAL
+
+        position_cash = int(available_cash * config.AFTERNOON_MAX_POSITION_PCT / 100)
+        order_price = round_to_tick(int(current * 1.005))
+        quantity = position_cash // order_price
+        if quantity <= 0:
+            continue
+
+        stop_loss = int(current * (1 - config.PULLBACK_STOP_LOSS_PCT / 100))
+        target = int(current * (1 + config.PULLBACK_TARGET_PCT / 100))
+
+        bot.send_message(
+            f"📉 <b>눌림목 반등 매수</b>\n\n"
+            f"{name} ({code})\n"
+            f"오전 고점: {morning_high:,}원 (+{mover['morning_high_pct']:.1f}%)\n"
+            f"현재가: {current:,}원 (되돌림 {retracement * 100:.0f}%)\n"
+            f"수량: {quantity}주 × {order_price:,}원\n"
+            f"목표: {target:,}원 (+{config.PULLBACK_TARGET_PCT}%)\n"
+            f"손절: {stop_loss:,}원 (-{config.PULLBACK_STOP_LOSS_PCT}%)"
+        )
+
+        order = {
+            "stock_code": code, "name": name,
+            "price": order_price, "quantity": quantity,
+            "amount": quantity * order_price,
+            "reason": f"눌림목 반등 (되돌림 {retracement * 100:.0f}%)",
+            "target1": target,
+            "target2": int(current * 1.05),
+            "stop_loss": stop_loss,
+            "score": 0,
+            "sell_strategy": {"type": "pullback", "target_pct": config.PULLBACK_TARGET_PCT},
+            "is_momentum": False,
+        }
+
+        results = trader.execute_buy_orders([order])
+        success = [r for r in results if r["success"]]
+        if not success:
+            bot.send_message(f"⚠️ {name} 눌림목 매수 실패")
+            continue
+
+        fills = []
+        for attempt in range(4):
+            time.sleep(15)
+            result = trader.check_fills(success)
+            if result is None:
+                continue
+            fills = result
+            if fills:
+                break
+
+        if fills:
+            f = fills[0]
+            fill_price = f["price"]
+            slippage = (fill_price - current) / current * 100 if current > 0 else 0
+            monitor.add_position(
+                stock_code=f["stock_code"], name=f["name"],
+                quantity=f["quantity"], entry_price=fill_price,
+                target1=int(fill_price * (1 + config.PULLBACK_TARGET_PCT / 100)),
+                target2=int(fill_price * 1.05),
+                stop_loss=int(fill_price * (1 - config.PULLBACK_STOP_LOSS_PCT / 100)),
+                sell_strategy={"type": "pullback", "target_pct": config.PULLBACK_TARGET_PCT},
+                buy_slippage_pct=slippage, score=0, phase="pullback", is_momentum=False,
+            )
+            bot.send_fill_confirmation(fills)
+            if not config.DRY_RUN and db:
+                db.save_trade(stock_code=f["stock_code"], stock_name=f["name"],
+                    action="buy", quantity=f["quantity"], price=fill_price,
+                    reason=order["reason"])
+            return "pullback_entered"
+
+        if not config.DRY_RUN:
+            try:
+                pending = kis.get_pending_orders()
+                pb = [p for p in pending if p["stock_code"] == code]
+                if pb:
+                    trader.cancel_unfilled_orders(pb)
+            except Exception:
+                pass
+
+    return None
 
 def _past_entry_cutoff() -> bool:
     hh, mm = map(int, config.NO_NEW_ENTRY_AFTER.split(":"))
@@ -751,8 +925,8 @@ def run_daily_cycle():
         if not _afternoon_started():
             start_str = config.AFTERNOON_PHASE_START
             bot.send_message(
-                f"☀️ 오전 전략 종료 — {start_str} 오후 전략 시작 대기\n"
-                f"(포지션↓ 사이즈↓ 보수적 운영)"
+                f"☀️ 오전 전략 종료 — {start_str} 눌림목 전략 시작 대기\n"
+                f"(오전 급등주 되돌림 매수)"
             )
             wait_until(config.AFTERNOON_PHASE_START, bot, kis, monitor)
 
@@ -772,72 +946,46 @@ def _run_afternoon_phase(
     trader: Trader, monitor: PositionMonitor,
     sold_codes: set, consecutive_losses: int,
 ):
-    logger.info("━━━ 오후 전략 시작 (%s ~ %s) ━━━",
+    """오후 눌림목 반등 전략."""
+    logger.info("━━━ 오후 눌림목 전략 시작 (%s ~ %s) ━━━",
                 config.AFTERNOON_PHASE_START, config.AFTERNOON_PHASE_END)
+    names = ", ".join(m["name"] for m in _morning_top_movers[:5]) if _morning_top_movers else "없음"
     bot.send_message(
-        f"🌙 <b>오후 전략 시작</b>\n"
-        f"시간: {config.AFTERNOON_PHASE_START} ~ {config.AFTERNOON_PHASE_END}\n"
+        f"📉 <b>오후 눌림목 전략 시작</b>\n"
+        f"대상: {names}\n"
         f"포지션: {config.AFTERNOON_MAX_POSITION_PCT}% | "
-        f"보유: {config.AFTERNOON_MAX_HOLD_MINUTES}분 | "
-        f"사이클: 최대 {config.AFTERNOON_MAX_CYCLES}회"
+        f"목표: +{config.PULLBACK_TARGET_PCT}% | "
+        f"손절: -{config.PULLBACK_STOP_LOSS_PCT}%"
     )
 
+    pullback_entries = 0
     cycle = 0
     while not _past_afternoon_cutoff() and cycle < config.AFTERNOON_MAX_CYCLES:
         cycle += 1
-        logger.info("━━━ 오후 사이클 %d/%d 시작 ━━━", cycle, config.AFTERNOON_MAX_CYCLES)
 
         daily_pnl = _get_daily_pnl_pct(monitor)
         if daily_pnl <= config.DAILY_LOSS_LIMIT_PCT:
-            logger.info("일일 손실한도 도달 (%.1f%%) — 오후 사이클 중단", daily_pnl)
-            bot.send_message(f"🛑 일일 손실한도 도달 ({daily_pnl:.1f}%) — 오후 매매 중단")
+            bot.send_message(f"🛑 일일 손실한도 ({daily_pnl:.1f}%) — 눌림목 중단")
             break
-        if daily_pnl >= config.DAILY_PROFIT_TARGET_PCT:
-            logger.info("일일 수익목표 달성 (%.1f%%) — 오후 사이클 중단", daily_pnl)
-            bot.send_message(f"🎯 일일 수익목표 달성 ({daily_pnl:.1f}%) — 오후 매매 중단")
-            break
-        if consecutive_losses >= config.MAX_CONSECUTIVE_LOSSES:
-            logger.info("%d연패 — 오후 매매 중단", consecutive_losses)
-            bot.send_message(f"🛑 {consecutive_losses}연패 — 오후 매매 중단")
+        if pullback_entries >= config.PULLBACK_MAX_ENTRIES:
+            bot.send_message(f"📉 눌림목 {pullback_entries}회 진입 완료 — 종료")
             break
 
-        trades_before = len(monitor.trades_today)
-        exit_reason = _run_one_cycle(
-            cycle, kis, bot, db, collector, analyzer, trader, monitor, sold_codes,
-            consecutive_losses=consecutive_losses,
-            phase="afternoon",
-        )
-        for t in monitor.trades_today[trades_before:]:
-            if "code" in t and t.get("pnl_amt", 0) < 0:
-                sold_codes.add(t["code"])
-
-        new_trades = monitor.trades_today[trades_before:]
-        if new_trades:
-            last_pnl = new_trades[-1].get("pnl_amt", 0)
-            if last_pnl < 0:
-                consecutive_losses += 1
-            else:
-                consecutive_losses = 0
-
-        retryable = ("no_picks", "opening_filtered", "low_confidence", "positions_cleared")
-        if exit_reason not in retryable:
-            logger.info("오후 사이클 종료 (사유: %s) — 재시도 불가", exit_reason)
-            break
-
-        if monitor.should_stop:
-            break
-
-        if not _past_afternoon_cutoff() and cycle < config.AFTERNOON_MAX_CYCLES:
-            cooldown = config.AFTERNOON_CYCLE_COOLDOWN
-            if exit_reason in ("no_picks", "opening_filtered", "low_confidence"):
-                cooldown = min(cooldown, 600)
-                bot.send_message(
-                    f"⏸ 오후 사이클 {cycle} — 진입 조건 미충족 ({exit_reason})\n"
-                    f"{cooldown // 60}분 후 시장 재분석합니다."
+        if not monitor.positions:
+            result = _try_pullback_entry(kis, bot, db, trader, monitor, sold_codes)
+            if result == "pullback_entered":
+                pullback_entries += 1
+                _run_monitoring_loop(
+                    monitor, bot, kis, collector, analyzer, trader, sold_codes, phase="pullback",
                 )
-            else:
-                bot.send_message(f"⏸ 오후 사이클 {cycle} 완료 — {cooldown // 60}분 쿨다운")
-            logger.info("오후 쿨다운 %d초 (사유: %s)", cooldown, exit_reason)
+                for t in monitor.trades_today:
+                    if t.get("phase") == "pullback" and t.get("pnl_amt", 0) < 0 and "code" in t:
+                        sold_codes.add(t["code"])
+                continue
+
+        if not _past_afternoon_cutoff():
+            cooldown = config.AFTERNOON_CYCLE_COOLDOWN
+            bot.send_message(f"⏸ 눌림목 대기 — {cooldown // 60}분 후 재스캔")
             cooldown_end = time.time() + cooldown
             while time.time() < cooldown_end:
                 try:
@@ -847,8 +995,6 @@ def _run_afternoon_phase(
                 if monitor.should_stop or _past_afternoon_cutoff():
                     break
                 time.sleep(min(30, cooldown_end - time.time()))
-
-    logger.info("━━━ 오후 전략 종료 ━━━")
 
 
 def _run_one_cycle(
