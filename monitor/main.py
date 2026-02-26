@@ -194,6 +194,12 @@ def _is_late_session() -> bool:
     hh, mm = map(int, config.LATE_SESSION_START.split(":"))
     return now_kst() >= now_kst().replace(hour=hh, minute=mm, second=0)
 
+def _is_early_morning() -> bool:
+    """장 초반 모드 (09:00 ~ 09:00+EARLY_MORNING_MINUTES)."""
+    now = now_kst()
+    market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    return now <= market_open + timedelta(minutes=config.EARLY_MORNING_MINUTES)
+
 
 # 모멘텀 스캔 요약 (사이클 메시지에서 참조)
 _last_momentum_scan_summary = ""
@@ -253,7 +259,13 @@ def _try_momentum_entry(
     change_pct = float(str(top.get("prdy_ctrt", "0")).replace(",", "") or "0")
     m_score = top.get("momentum_score", 0)
 
-    min_score = config.LATE_SESSION_MIN_SCORE if late else config.MOMENTUM_MIN_SCORE
+    early = _is_early_morning()
+    if late:
+        min_score = config.LATE_SESSION_MIN_SCORE
+    elif early:
+        min_score = config.EARLY_MOMENTUM_MIN_SCORE
+    else:
+        min_score = config.MOMENTUM_MIN_SCORE
     if m_score < min_score:
         logger.info("모멘텀 1위 스코어 부족: %s (%.1f, 최소 %d) — 스킵",
                     name, m_score, min_score)
@@ -668,7 +680,8 @@ def run_daily_cycle():
             break
 
         if not _past_entry_cutoff() and cycle < config.MAX_CYCLES:
-            cooldown = config.CYCLE_COOLDOWN
+            early = _is_early_morning()
+            cooldown = config.EARLY_CYCLE_COOLDOWN if early else config.CYCLE_COOLDOWN
             # 매매비추천/필터탈락은 쿨다운 짧게 (시장 변화 빠르게 재확인)
             if exit_reason in ("no_picks", "opening_filtered", "low_confidence"):
                 cooldown = min(cooldown, 600)  # 최대 10분

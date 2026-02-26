@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import math
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import Semaphore
 
 import pytz
@@ -16,6 +16,12 @@ from stock_scorer import score_stocks
 logger = logging.getLogger(__name__)
 
 KST = pytz.timezone("Asia/Seoul")
+
+def _is_early_morning() -> bool:
+    """장 초반 모드 활성 여부 (09:00 ~ 09:00+EARLY_MORNING_MINUTES)."""
+    now = datetime.now(KST)
+    market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    return now <= market_open + timedelta(minutes=config.EARLY_MORNING_MINUTES)
 
 
 def _min_trading_value(price: int) -> int:
@@ -235,7 +241,7 @@ class MarketDataCollector:
     def _get_momentum_candidates(self) -> list[dict]:
         try:
             ranking = self.kis.get_fluctuation_ranking_filtered(
-                rate_min=config.MOMENTUM_RATE_MIN,
+                rate_min=config.EARLY_MOMENTUM_RATE_MIN if _is_early_morning() else config.MOMENTUM_RATE_MIN,
                 rate_max=config.MOMENTUM_RATE_MAX,
                 price_min=config.MOMENTUM_MIN_PRICE,
                 vol_min=config.MOMENTUM_MIN_VOLUME,
@@ -374,7 +380,13 @@ class MarketDataCollector:
             change = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
 
             # === 등락률 점수 (부드러운 곡선) ===
-            if change < 5.0:
+            early = _is_early_morning()
+            if change < 3.0:
+                change_score = 0.0
+            elif early and change < 5.0:
+                # 장 초반: 3~5% 부분점수 (0.3~0.7)
+                change_score = 0.3 + 0.4 * (change - 3.0) / 2.0
+            elif change < 5.0:
                 change_score = 0.0
             elif change < config.MOMENTUM_OPTIMAL_CHANGE_MIN:
                 change_score = 0.5 + 0.5 * (change - 5.0) / (config.MOMENTUM_OPTIMAL_CHANGE_MIN - 5.0)
@@ -401,13 +413,14 @@ class MarketDataCollector:
             vol_score = min(math.log(max(raw_vol_ratio, 1)) + 1, 5)  # ln, 1.0~5.0
 
             # === 거래량 하드 게이트 ===
-            if vol_score < config.MOMENTUM_VOL_GATE:
+            vol_gate = config.EARLY_MOMENTUM_VOL_GATE if _is_early_morning() else config.MOMENTUM_VOL_GATE
+            if vol_score < vol_gate:
                 s["momentum_score"] = 0
                 s["score"] = 0
                 s["trend_bonus"] = 0
                 s["score_detail"] = {
                     "total": 0,
-                    "breakdown": f"거래량 부족 (vol_score {vol_score:.2f} < {config.MOMENTUM_VOL_GATE})",
+                    "breakdown": f"거래량 부족 (vol_score {vol_score:.2f} < {vol_gate})",
                 }
                 continue
 
@@ -528,8 +541,13 @@ class MarketDataCollector:
             return False, f"고점 대비 {high_ratio*100:.1f}% ({config.MOMENTUM_MIN_HIGH_RATIO*100:.0f}% 미만)"
 
         # 조건 2: 시가 대비 양봉 (시가 이상)
-        if today_open > 0 and current < today_open:
-            logger.info("모멘텀 fallback 거부: %s 시가 하회 (%s < %s)", code, f"{current:,}", f"{today_open:,}")
+        early = _is_early_morning()
+        tolerance = config.EARLY_FALLBACK_OPEN_TOLERANCE if early else 0.0
+        if today_open > 0 and current < today_open * (1 - tolerance):
+            if early:
+                logger.info("모멘텀 fallback 거부: %s 시가 하회 (%s < %s × %.1f%%)", code, f"{current:,}", f"{today_open:,}", (1 - tolerance) * 100)
+            else:
+                logger.info("모멘텀 fallback 거부: %s 시가 하회 (%s < %s)", code, f"{current:,}", f"{today_open:,}")
             return False, f"시가 하회 ({current:,} < {today_open:,})"
 
         # 조건 3: 최소 거래량 확인
