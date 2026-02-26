@@ -457,10 +457,10 @@ class MarketDataCollector:
                 int(str(c.get("stck_hgpr", 0)).replace(",", "") or 0) for c in candles[:6]
             )
             if today_high > 0 and current > 0:
-                near_high = current >= today_high * 0.98
+                near_high = current >= today_high * (config.MOMENTUM_MIN_HIGH_RATIO + 0.02)
                 vol_strong = curr_vol > prev_vol * 0.8
                 if near_high and vol_strong:
-                    logger.info("모멘텀 고점 근접 진입: %s (고점 98%%↑, 거래량 유지)", code)
+                    logger.info("모멘텀 고점 근접 진입: %s (고점 %.1f%%↑, 거래량 유지)", code, current / today_high * 100)
                     return True
 
             return False
@@ -481,10 +481,10 @@ class MarketDataCollector:
         if current <= 0 or today_high <= 0:
             return False
 
-        # 조건 1: 고점 대비 97% 이상 유지 (5분봉 없으므로 기준 약간 강화)
+        # 조건 1: 고점 대비 config 기준 이상 유지 (fallback이므로 config값 그대로)
         high_ratio = current / today_high
-        if high_ratio < 0.97:
-            logger.info("모멘텀 fallback 거부: %s 고점 대비 %.1f%% (97%% 미만)", code, high_ratio * 100)
+        if high_ratio < config.MOMENTUM_MIN_HIGH_RATIO:
+            logger.info("모멘텀 fallback 거부: %s 고점 대비 %.1f%% (%.0f%% 미만)", code, high_ratio * 100, config.MOMENTUM_MIN_HIGH_RATIO * 100)
             return False
 
         # 조건 2: 시가 대비 양봉 (시가 이상)
