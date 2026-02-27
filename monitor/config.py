@@ -36,21 +36,27 @@ TRAILING_STOP_LEVELS = [
 
 # --- 멀티사이클 ---
 MAX_CYCLES = int(os.getenv("MAX_CYCLES", "10"))
-NO_NEW_ENTRY_AFTER = "14:30"   # 14:30 이후 신규 진입 차단 (15:10 강제청산 전)
+NO_NEW_ENTRY_AFTER = os.getenv("NO_NEW_ENTRY_AFTER", "10:30")  # 10:30 이후 신규 진입 차단
 FORCE_CLOSE_TIME = "15:10"     # 전량 강제 청산
 CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "180"))  # 사이클 간 쿨다운 (초)
 
-# --- 오후 전략 (비활성화 — 종일 모멘텀으로 통합) ---
-AFTERNOON_ENABLED = False
-AFTERNOON_PHASE_START = os.getenv("AFTERNOON_PHASE_START", "11:00")
-AFTERNOON_PHASE_END = os.getenv("AFTERNOON_PHASE_END", "14:30")
+# --- 오후 전략: 눌림목 반등 매매 (10:30~14:00) ---
+AFTERNOON_ENABLED = os.getenv("AFTERNOON_ENABLED", "true").lower() == "true"  # False→True!
+AFTERNOON_PHASE_START = os.getenv("AFTERNOON_PHASE_START", "10:30")  # 11:00→10:30
+AFTERNOON_PHASE_END = os.getenv("AFTERNOON_PHASE_END", "14:00")  # 14:30→14:00
 AFTERNOON_MAX_CYCLES = int(os.getenv("AFTERNOON_MAX_CYCLES", "3"))
-AFTERNOON_MAX_POSITION_PCT = int(os.getenv("AFTERNOON_MAX_POSITION_PCT", "50"))
+AFTERNOON_MAX_POSITION_PCT = int(os.getenv("AFTERNOON_MAX_POSITION_PCT", "30"))  # 50→30%
 AFTERNOON_MAX_HOLD_MINUTES = int(os.getenv("AFTERNOON_MAX_HOLD_MINUTES", "20"))
 AFTERNOON_MIN_STOP_LOSS_PCT = float(os.getenv("AFTERNOON_MIN_STOP_LOSS_PCT", "1.5"))
-AFTERNOON_CYCLE_COOLDOWN = int(os.getenv("AFTERNOON_CYCLE_COOLDOWN", "900"))  # 15분
-AFTERNOON_HARD_FILTER_CHANGE_MIN = float(os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MIN", "-0.5"))
-AFTERNOON_HARD_FILTER_CHANGE_MAX = float(os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MAX", "3.0"))
+AFTERNOON_CYCLE_COOLDOWN = int(os.getenv("AFTERNOON_CYCLE_COOLDOWN", "600"))  # 900→600초(10분)
+# 눌림목 전략 전용 파라미터
+PULLBACK_MIN_MORNING_CHANGE = float(os.getenv("PULLBACK_MIN_MORNING_CHANGE", "8.0"))  # 오전 최소 등락률 8%+
+PULLBACK_RETRACEMENT_MIN = float(os.getenv("PULLBACK_RETRACEMENT_MIN", "0.30"))  # 고점 대비 최소 30% 되돌림
+PULLBACK_RETRACEMENT_MAX = float(os.getenv("PULLBACK_RETRACEMENT_MAX", "0.60"))  # 최대 60% (그 이상=추세 꺾임)
+PULLBACK_TARGET_PCT = float(os.getenv("PULLBACK_TARGET_PCT", "3.0"))  # 고정 목표 +3%
+PULLBACK_STOP_LOSS_PCT = float(os.getenv("PULLBACK_STOP_LOSS_PCT", "1.5"))  # 손절 -1.5%
+PULLBACK_BOUNCE_CONFIRM_PCT = float(os.getenv("PULLBACK_BOUNCE_CONFIRM_PCT", "0.5"))  # 저점 대비 +0.5% 반등 확인
+PULLBACK_MAX_ENTRIES = int(os.getenv("PULLBACK_MAX_ENTRIES", "1"))  # 오후 최대 진입 1회
 
 MIN_STOP_LOSS_PCT = float(os.getenv("MIN_STOP_LOSS_PCT", "1.2"))
 MAX_ENTRY_DEVIATION_PCT = float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "3.0"))  # 현재가 vs 지정가 허용 괴리 (%)
@@ -65,9 +71,13 @@ MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "30"))
 
 # --- 일일 리스크 관리 (보수적) ---
 DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "-1.5"))
-DAILY_PROFIT_TARGET_PCT = float(os.getenv("DAILY_PROFIT_TARGET_PCT", "2.0"))
+DAILY_PROFIT_TARGET_PCT = float(os.getenv("DAILY_PROFIT_TARGET_PCT", "5.0"))  # 일일 누적 수익 상한 (안전망)
 MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2"))  # 연패 시 당일 중단
 MIN_CONFIDENCE_AFTER_LOSS = int(os.getenv("MIN_CONFIDENCE_AFTER_LOSS", "75"))  # 손절 후 다음 사이클 최소 신뢰도
+
+# --- 사이클별 분기 전략 ---
+FIRST_PROFIT_STOP_PCT = float(os.getenv("FIRST_PROFIT_STOP_PCT", "3.0"))  # 단일 거래 +3% 이상 → 당일 종료
+AFTER_LOSS_MIN_SCORE = int(os.getenv("AFTER_LOSS_MIN_SCORE", "65"))  # 손절 후 다음 진입 최소 모멘텀 스코어
 
 MIN_REINVEST_CASH = int(os.getenv("MIN_REINVEST_CASH", "200000"))
 REINVEST_CHECK_INTERVAL = int(os.getenv("REINVEST_CHECK_INTERVAL", "300"))
@@ -123,16 +133,17 @@ MOMENTUM_VOL_SUSTAIN_RATIO = float(os.getenv("MOMENTUM_VOL_SUSTAIN_RATIO", "0.7"
 MOMENTUM_ENTRY_START = os.getenv("MOMENTUM_ENTRY_START", "09:02")   # 모멘텀 진입 시작
 MOMENTUM_ENTRY_END = os.getenv("MOMENTUM_ENTRY_END", "14:30")       # 모멘텀 진입 종료
 MOMENTUM_STOP_LOSS_PCT = float(os.getenv("MOMENTUM_STOP_LOSS_PCT", "2.5"))  # 모멘텀 손절 기본값
-MOMENTUM_MIN_SCORE = int(os.getenv("MOMENTUM_MIN_SCORE", "60"))
+MOMENTUM_MIN_SCORE = int(os.getenv("MOMENTUM_MIN_SCORE", "50"))
 MOMENTUM_STOP_LOSS_BY_SCORE = [
-    (80, 3.5),   # 스코어 80+ → -3.5% (확신 높음, 버틴다)
-    (60, 2.5),   # 스코어 60~79 → -2.5% (기본)
+    (70, 3.5),   # 스코어 70+ → -3.5% (확신 높음, 버틴다)
+    (50, 2.5),   # 스코어 50~69 → -2.5% (기본)
 ]
 MOMENTUM_TIME_STOP_MINUTES = int(os.getenv("MOMENTUM_TIME_STOP_MINUTES", "20"))  # 20분 횡보 시 청산
 MOMENTUM_TIME_STOP_MIN_PROFIT = float(os.getenv("MOMENTUM_TIME_STOP_MIN_PROFIT", "0.5"))  # 20분 후 +0.5% 미만이면 청산
 MOMENTUM_DAILY_MAX_LOSSES = int(os.getenv("MOMENTUM_DAILY_MAX_LOSSES", "2"))  # 하루 모멘텀 손절 2회 → 당일 중단
 MOMENTUM_OPTIMAL_CHANGE_MIN = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MIN", "8.0"))  # 스코어링: 최적 등락률 하한
 MOMENTUM_OPTIMAL_CHANGE_MAX = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MAX", "15.0"))  # 스코어링: 최적 등락률 상한
+MOMENTUM_VOL_GATE = float(os.getenv("MOMENTUM_VOL_GATE", "2.0"))  # 시간보정 거래량비 최소 게이트 (ln스케일)
 
 # 모멘텀 트레일링 스톱 (일반보다 넓음 — 모멘텀주 정상 변동폭 수용)
 MOMENTUM_TRAILING_STOP_LEVELS = [
@@ -146,11 +157,49 @@ MOMENTUM_TRAILING_STOP_LEVELS = [
 # --- 후반 시간대 (10:30 이후) 보수적 파라미터 ---
 LATE_SESSION_START = "10:30"
 LATE_SESSION_POSITION_PCT = 40
-LATE_SESSION_MIN_SCORE = 75
+LATE_SESSION_MIN_SCORE = 65
 LATE_SESSION_STOP_LOSS_PCT = 2.0
-LATE_SESSION_REQUIRE_PROFIT = True   # 오전 수익 중일 때만 진입
+LATE_SESSION_REQUIRE_PROFIT = os.getenv("LATE_SESSION_REQUIRE_PROFIT", "false").lower() == "true"
+
+# --- 장 초반 빠른 진입 모드 (09:00~09:10) ---
+# 초반 10분간 모멘텀 진입 조건 완화: 낮은 스코어/등락률도 진입 허용
+EARLY_MORNING_MINUTES = int(os.getenv("EARLY_MORNING_MINUTES", "10"))
+EARLY_MOMENTUM_RATE_MIN = float(os.getenv("EARLY_MOMENTUM_RATE_MIN", "3.0"))  # 소싱 등락률 하한 3% (평시 5%)
+EARLY_MOMENTUM_MIN_SCORE = int(os.getenv("EARLY_MOMENTUM_MIN_SCORE", "35"))  # 최소 스코어 35 (평시 50)
+EARLY_MOMENTUM_VOL_GATE = float(os.getenv("EARLY_MOMENTUM_VOL_GATE", "1.5"))  # 거래량 게이트 1.5 (평시 2.0)
+EARLY_CYCLE_COOLDOWN = int(os.getenv("EARLY_CYCLE_COOLDOWN", "90"))  # 쿨다운 90초 (평시 180초)
+EARLY_FALLBACK_OPEN_TOLERANCE = float(os.getenv("EARLY_FALLBACK_OPEN_TOLERANCE", "0.005"))  # 시가 대비 0.5% 하회 허용
+EARLY_SKIP_PULLBACK_SCORE = int(os.getenv("EARLY_SKIP_PULLBACK_SCORE", "40"))  # 이 스코어 이상이면 풀백 없이 즉시 진입
+EARLY_SKIP_PULLBACK_HIGH_RATIO = float(os.getenv("EARLY_SKIP_PULLBACK_HIGH_RATIO", "0.97"))  # 고점 대비 97% 이상일 때만
 
 MARKET_INDEX_BLOCK_PCT = -1.0   # KOSDAQ 이 값 이하 시 모멘텀 진입 차단
+
+
+# --- 불장 모드 (Market Boost) — 시장 강세/호재 뉴스 감지 시 공격적 파라미터 ---
+BOOST_ENABLED = os.getenv("BOOST_ENABLED", "true").lower() == "true"
+SENTIMENT_TIME = os.getenv("SENTIMENT_TIME", "08:55")  # 장 시작 5분 전 뉴스 센티먼트 분석
+BOOST_KOSPI_THRESHOLD = float(os.getenv("BOOST_KOSPI_THRESHOLD", "1.0"))  # KOSPI +1%↑ → 부스트 후보
+BOOST_KOSDAQ_THRESHOLD = float(os.getenv("BOOST_KOSDAQ_THRESHOLD", "1.5"))  # KOSDAQ +1.5%↑ → 부스트 후보
+BOOST_CONFIRM_MINUTES = int(os.getenv("BOOST_CONFIRM_MINUTES", "8"))  # 09:02 감지 후 8분간 유지 확인
+BOOST_MAX_POSITION_PCT = int(os.getenv("BOOST_MAX_POSITION_PCT", "95"))  # 포지션 95%
+BOOST_MOMENTUM_MIN_SCORE = int(os.getenv("BOOST_MOMENTUM_MIN_SCORE", "35"))  # 최소 스코어 35
+BOOST_STOP_LOSS_PCT = float(os.getenv("BOOST_STOP_LOSS_PCT", "3.5"))  # 손절 -3.5% (숨 여유)
+BOOST_FIRST_PROFIT_STOP_PCT = float(os.getenv("BOOST_FIRST_PROFIT_STOP_PCT", "5.0"))  # +5% 이상 시 종료
+BOOST_NO_NEW_ENTRY_AFTER = os.getenv("BOOST_NO_NEW_ENTRY_AFTER", "13:00")  # 오후 1시까지 신규 진입 허용
+BOOST_CYCLE_COOLDOWN = int(os.getenv("BOOST_CYCLE_COOLDOWN", "90"))  # 쿨다운 90초
+BOOST_DAILY_PROFIT_TARGET_PCT = float(os.getenv("BOOST_DAILY_PROFIT_TARGET_PCT", "8.0"))  # 일일 수익 상한 8%
+BOOST_THEME_SCORE_BONUS = float(os.getenv("BOOST_THEME_SCORE_BONUS", "1.2"))  # 수혜테마 종목 스코어 +20%
+BOOST_THEME_SCORE_PENALTY = float(os.getenv("BOOST_THEME_SCORE_PENALTY", "0.85"))  # 피해테마 종목 스코어 -15%
+# 불장 모드 트레일링 스탑 (넓은 숨 여유 — 최대한 늦게, 높을 때 매도)
+BOOST_MOMENTUM_TRAILING_STOP_LEVELS = [
+    (15.0, 12.0),   # +15% 찍으면 최소 +12% 확보 (3% 여유)
+    (10.0, 7.0),    # +10% 찍으면 최소 +7% 확보 (3% 여유)
+    (7.0, 4.0),     # +7%  찍으면 최소 +4% 확보 (3% 여유)
+    (5.0, 2.5),     # +5%  찍으면 최소 +2.5% 확보 (2.5% 여유)
+    (3.0, 0.5),     # +3%  찍으면 최소 +0.5% 확보 (수수료 커버)
+]
+BOOST_TIME_STOP_MINUTES = int(os.getenv("BOOST_TIME_STOP_MINUTES", "40"))  # 횡보 청산 40분 (평시 20분)
+BOOST_TIME_STOP_MIN_PROFIT = float(os.getenv("BOOST_TIME_STOP_MIN_PROFIT", "0.3"))  # 40분 후 +0.3% 미만이면 청산
 
 # --- 거래대금 필터 (가격대별 차등) ---
 # 저가주는 거래대금 기준을 낮춰 아이티켐(1~2만원대) 같은 중소형 급등주도 포착

@@ -11,6 +11,26 @@ from telegram_bot import TelegramBot
 logger = logging.getLogger(__name__)
 
 
+def round_to_tick(price: int) -> int:
+    """주문 가격을 한국 주식시장 호가 단위로 올림 처리."""
+    if price < 2_000:
+        return price
+    elif price < 5_000:
+        tick = 5
+    elif price < 20_000:
+        tick = 10
+    elif price < 50_000:
+        tick = 50
+    elif price < 200_000:
+        tick = 100
+    elif price < 500_000:
+        tick = 500
+    else:
+        tick = 1_000
+    # 올림: 매수 시 체결 가능성 높이기 위해 ceil
+    return ((price + tick - 1) // tick) * tick
+
+
 class Trader:
     def __init__(self, kis: KISClient, bot: TelegramBot, db: Database | None = None):
         self.kis = kis
@@ -114,7 +134,7 @@ class Trader:
                 if current_price != ai_price:
                         if order.get("is_momentum"):
                             # 모멘텀: 최신 현재가 기준 +1% 상한 지정가 유지
-                            adjusted_price = int(current_price * 1.01)
+                            adjusted_price = round_to_tick(int(current_price * 1.01))
                             logger.info(
                                 "%s 모멘텀 상한지정가 갱신: %s → %s (현재가 %s +1%%)",
                                 order["name"], f"{ai_price:,}", f"{adjusted_price:,}", f"{current_price:,}",
@@ -242,7 +262,7 @@ class Trader:
                     retry_results.append({**order, "retried": False, "reason": reason})
                     continue
 
-                suggested_price = reanalysis.get("suggested_price", current_price)
+                suggested_price = round_to_tick(int(reanalysis.get("suggested_price", current_price)))
                 qty = order["remaining_qty"]
 
                 result = self.kis.place_buy_order(code, qty, suggested_price)

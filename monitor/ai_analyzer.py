@@ -246,7 +246,55 @@ class AIAnalyzer:
             return self._call_anthropic_light(prompt)
         return self._call_openai_light(prompt)
 
-    def _call_anthropic_light(self, prompt: str) -> dict:
+    SENTIMENT_PROMPT = """다음은 오늘 한국 증시 관련 주요 뉴스 헤드라인이다.
+시장 전체에 미치는 영향을 판단하라.
+
+{headlines}
+
+반드시 아래 JSON으로만 응답. 첫 문자는 반드시 {{ 이어야 합니다:
+{{
+  "sentiment": "bullish" 또는 "neutral" 또는 "bearish",
+  "confidence": 0-100,
+  "boost_themes": ["방산", "원전"],
+  "hurt_themes": ["수출주"],
+  "summary": "한줄 요약 (한국어)"
+}}"""
+
+    def analyze_market_sentiment(self, headlines: list[dict]) -> dict:
+        """시장 뉴스 헤드라인을 Claude에게 센티먼트 분석 요청."""
+        default = {
+            "sentiment": "neutral",
+            "confidence": 0,
+            "boost_themes": [],
+            "hurt_themes": [],
+            "summary": "분석 실패",
+        }
+        if not headlines:
+            return default
+
+        text_lines = []
+        for i, h in enumerate(headlines[:15], 1):
+            title = h.get("title", "") if isinstance(h, dict) else str(h)
+            text_lines.append(f"{i}. {title}")
+        headlines_text = "\n".join(text_lines)
+        prompt = self.SENTIMENT_PROMPT.format(headlines=headlines_text)
+
+        try:
+            _sys = "너는 한국 증시 거시 분석 전문가다. 뉴스 헤드라인을 보고 시장 전체 센티먼트와 수혜/피해 테마를 판단한다. 순수 JSON만 출력하라."
+            if self.provider == "anthropic":
+                result = self._call_anthropic_light(prompt, system_prompt=_sys)
+            else:
+                result = self._call_openai_light(prompt)
+            # 필수 키 보정
+            for key in ("sentiment", "confidence", "boost_themes", "hurt_themes", "summary"):
+                if key not in result:
+                    result[key] = default[key]
+            return result
+        except Exception as e:
+            logger.warning("시장 센티먼트 분석 실패: %s", e)
+            return default
+
+    def _call_anthropic_light(self, prompt: str, system_prompt: str | None = None) -> dict:
         last_error = Exception("재시도 모두 실패")
         for attempt in range(2):
             try:
@@ -260,7 +308,7 @@ class AIAnalyzer:
                     json={
                         "model": "claude-sonnet-4-20250514",
                         "max_tokens": 500,
-                        "system": "너는 한국 주식 단타 전문가다. 미체결 주문의 현재가 재진입 여부를 판단한다. 순수 JSON만 출력하라.",
+                        "system": system_prompt or "너는 한국 주식 단타 전문가다. 미체결 주문의 현재가 재진입 여부를 판단한다. 순수 JSON만 출력하라.",
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0,
                     },

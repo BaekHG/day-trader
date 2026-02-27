@@ -310,6 +310,7 @@ class KISClient:
         params = {
             "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": stock_code,
             "FID_INPUT_HOUR_1": now.strftime("%H%M%S"), "FID_PW_DATA_INCU_YN": "Y",
+            "FID_ETC_CLS_CODE": "",
         }
         resp = self._get(url, headers=self._headers("FHKST03010200"), params=params)
         return (resp.json().get("output2", []) or [])[:12]
