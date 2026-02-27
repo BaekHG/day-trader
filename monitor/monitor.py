@@ -66,6 +66,9 @@ class PositionMonitor:
         force_hh, force_mm = map(int, config.FORCE_CLOSE_TIME.split(":"))
 
         for code, pos in list(self.positions.items()):
+            # 수동 매수 포지션은 모니터링 완전 스킵 (유저가 직접 관리)
+            if pos.get("manual"):
+                continue
             try:
                 price_data = self.kis.get_current_price(code)
             except Exception as e:
@@ -502,8 +505,9 @@ class PositionMonitor:
                     quantity=h["quantity"], entry_price=entry,
                     target1=0, target2=0, stop_loss=stop_loss,
                 )
+                self.positions[code]["manual"] = True  # 수동 매수 — 모니터링 제외
                 added.append(h)
-                logger.info("동기화 추가: %s %d주 @ %s원", h["name"], h["quantity"], f"{entry:,}")
+                logger.info("동기화 추가 [수동]: %s %d주 @ %s원 (모니터링 제외)", h["name"], h["quantity"], f"{entry:,}")
 
         for code in list(pos_codes):
             if code not in kis_codes:
