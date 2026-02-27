@@ -113,10 +113,15 @@ class KISClient:
         }
 
     def place_sell_order(self, stock_code: str, quantity: int, price: int = 0) -> dict:
+        """매도 주문. price>0이면 지정가, 0이면 시장가."""
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-cash"
+        if price > 0:
+            ord_dvsn, ord_unpr = "00", str(price)  # 지정가
+        else:
+            ord_dvsn, ord_unpr = "01", "0"  # 시장가
         body = {
             "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
-            "PDNO": stock_code, "ORD_DVSN": "01", "ORD_QTY": str(quantity), "ORD_UNPR": "0",
+            "PDNO": stock_code, "ORD_DVSN": ord_dvsn, "ORD_QTY": str(quantity), "ORD_UNPR": ord_unpr,
         }
         resp = self._post(url, headers=self._headers("TTTC0011U"), json=body)
         return resp.json()
@@ -188,14 +193,14 @@ class KISClient:
         resp = self._post(url, headers=self._headers("TTTC0803U"), json=body)
         return resp.json()
 
-    def get_pending_orders(self) -> list[dict]:
-        """당일 미체결 매수 주문 조회. TTTC8001R + CCLD_DVSN=02."""
+    def get_pending_orders(self, sll_buy_dvsn: str = "02") -> list[dict]:
+        """당일 미체결 주문 조회. sll_buy_dvsn: '00'=전체, '01'=매도, '02'=매수(기본)."""
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
         today = datetime.now(KST).strftime("%Y%m%d")
         params = {
             "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
             "INQR_STRT_DT": today, "INQR_END_DT": today,
-            "SLL_BUY_DVSN_CD": "02",
+            "SLL_BUY_DVSN_CD": sll_buy_dvsn,
             "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "02",
             "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00",
             "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",

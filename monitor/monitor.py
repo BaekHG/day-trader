@@ -192,6 +192,74 @@ class PositionMonitor:
                 pos["name"], f"{current:,}", pnl_pct, f"{pos['high_since_entry']:,}", remaining,
             )
 
+    def _step_down_sell(self, code: str, name: str, qty: int, current_price: int) -> dict:
+        """단계적 매도: 지정가(+0.3%) → 지정가(현재가) → 시장가.
+
+        높은 가격에 먼저 팔아보고, 안 되면 점점 내려오는 전략.
+        """
+        offset_price = int(current_price * (1 + config.SELL_LIMIT_OFFSET_PCT / 100))
+
+        steps = [
+            ("지정가+{:.1f}%".format(config.SELL_LIMIT_OFFSET_PCT), offset_price),
+            ("지정가(현재가)", 0),   # 0 = refresh price at step time
+            ("시장가", -1),          # -1 = market order
+        ]
+
+        for i, (label, target_price) in enumerate(steps):
+            # --- 시장가 (최종 폴백) ---
+            if target_price == -1:
+                logger.info("매도 %d단계 — %s %s", i + 1, name, label)
+                return self.kis.place_sell_order(code, qty)
+
+            # --- 지정가(현재가) → 실시간 가격 조회 ---
+            if target_price == 0:
+                try:
+                    target_price = self.kis.get_current_price(code)["price"]
+                except Exception:
+                    logger.warning("가격 조회 실패 — 시장가 폴백")
+                    return self.kis.place_sell_order(code, qty)
+
+            logger.info("매도 %d단계 — %s %s원 (%s)", i + 1, name, f"{target_price:,}", label)
+            result = self.kis.place_sell_order(code, qty, price=target_price)
+
+            if result.get("rt_cd") != "0":
+                logger.warning("매도 주문 제출 실패: %s — 다음 단계", result.get("msg1", ""))
+                continue
+
+            # --- 체결 대기 ---
+            time.sleep(config.SELL_STEP_WAIT_SEC)
+
+            # --- 미체결 확인 ---
+            try:
+                pending = self.kis.get_pending_orders(sll_buy_dvsn="01")
+                still_pending = [p for p in pending if p["stock_code"] == code and p["remaining_qty"] > 0]
+            except Exception as e:
+                logger.warning("미체결 조회 실패: %s — 체결된 것으로 간주", e)
+                return result
+
+            if not still_pending:
+                logger.info("매도 체결 완료 — %s %s원", name, f"{target_price:,}")
+                return result
+
+            # --- 부분 체결 확인 ---
+            filled_so_far = qty - still_pending[0]["remaining_qty"]
+            if filled_so_far > 0:
+                logger.info("부분 체결 %d/%d주 — 나머지 다음 단계", filled_so_far, qty)
+                qty = still_pending[0]["remaining_qty"]
+
+            # --- 취소 후 다음 단계 ---
+            for p in still_pending:
+                try:
+                    self.kis.cancel_order(p["ord_gno_brno"], p["odno"], p["remaining_qty"])
+                except Exception as e:
+                    logger.warning("매도 취소 실패: %s — 시장가 폴백", e)
+                    return self.kis.place_sell_order(code, qty)
+
+            time.sleep(1)  # 취소 처리 대기
+
+        # safety net
+        return self.kis.place_sell_order(code, qty)
+
     def _execute_sell(self, code: str, pos: dict, qty: int, price: int, reason: str, pnl_pct: float):
         name = pos["name"]
         entry = pos["entry_price"]
@@ -222,12 +290,29 @@ class PositionMonitor:
         else:
             exit_type = "manual"
 
+        # 긴급 매도 판별: 손절/강제/갭실패 → 시장가 즉시, 그 외 → 단계적 매도
+        urgent = any(kw in reason for kw in ("손절", "강제", "갭 실패"))
+
         success = False
         result = {}
         if config.DRY_RUN:
             success = True
             logger.info("[모의] 매도 시뮬레이션: %s %d주 × %s원", name, qty, f"{price:,}")
+        elif not urgent and config.SELL_STEP_DOWN:
+            # --- 단계적 매도: 지정가 → 시장가 ---
+            try:
+                result = self._step_down_sell(code, name, qty, price)
+                success = result.get("rt_cd") == "0"
+            except Exception as e:
+                logger.error("단계적 매도 실패 %s: %s — 시장가 폴백", name, e)
+                try:
+                    result = self.kis.place_sell_order(code, qty)
+                    success = result.get("rt_cd") == "0"
+                except Exception as e2:
+                    self.bot.send_message(f"⚠️ {name} 매도 완전 실패: {e2}")
+                    return
         else:
+            # --- 긴급 매도: 시장가 즉시 ---
             for sell_attempt in range(3):
                 try:
                     result = self.kis.place_sell_order(code, qty)
