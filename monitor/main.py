@@ -411,9 +411,15 @@ def _try_momentum_entry(
             )
             return None
 
-    # --- 초반 모드: 고스코어 + 고점 근처면 풀백 없이 즉시 진입 ---
+    # --- 고스코어 즉시 진입: 풀백 패턴 없이도 진입 허용 ---
     skip_pullback = False
-    if early and m_score >= config.EARLY_SKIP_PULLBACK_SCORE:
+    # 1) 스코어가 충분히 높으면 시간대 무관하게 풀백 생략 (네오티스 75.8 사례)
+    if m_score >= config.MOMENTUM_SKIP_PULLBACK_SCORE:
+        skip_pullback = True
+        logger.info("고스코어 즉시 진입: %s (스코어 %.1f ≥ %d) — 풀백 스킵",
+                    name, m_score, config.MOMENTUM_SKIP_PULLBACK_SCORE)
+    # 2) 초반 모드: 낮은 스코어도 고점 근처면 풀백 생략
+    elif early and m_score >= config.EARLY_SKIP_PULLBACK_SCORE:
         high_ratio = top.get("_high_ratio", 0)
         if high_ratio == 0:
             today_high = int(str(top.get("stck_hgpr", 0)).replace(",", "") or 0)
