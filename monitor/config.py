@@ -154,6 +154,12 @@ MOMENTUM_TRAILING_STOP_LEVELS = [
     (1.5, 0.3),    # +1.5% 도달 → +0.3% 확보 (수수료 커버)
 ]
 
+# --- 단계적 매도 (슬리피지 방지) ---
+# 지정가(높은가격) → 지정가(현재가) → 시장가 순서로 시도
+SELL_STEP_DOWN = os.getenv("SELL_STEP_DOWN", "true").lower() == "true"
+SELL_LIMIT_OFFSET_PCT = float(os.getenv("SELL_LIMIT_OFFSET_PCT", "0.3"))  # 1단계: 현재가 + 0.3%
+SELL_STEP_WAIT_SEC = int(os.getenv("SELL_STEP_WAIT_SEC", "3"))  # 각 단계 대기 시간 (초)
+
 # --- 후반 시간대 (10:30 이후) 보수적 파라미터 ---
 LATE_SESSION_START = "10:30"
 LATE_SESSION_POSITION_PCT = 40
