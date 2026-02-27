@@ -313,13 +313,10 @@ def _try_momentum_entry(
 
     kosdaq = market_data.get("kosdaq_index", {})
     kosdaq_change = float(kosdaq.get("change_rate", "0") if isinstance(kosdaq, dict) else "0")
-    if kosdaq_change <= config.MARKET_INDEX_BLOCK_PCT:
-        logger.info("KOSDAQ %.1f%% — 시장 폭락 진입 차단 (한도 %.1f%%)",
+    _kosdaq_blocked = kosdaq_change <= config.MARKET_INDEX_BLOCK_PCT
+    if _kosdaq_blocked:
+        logger.info("KOSDAQ %.1f%% — 시장 하락 감지 (한도 %.1f%%, 고스코어 오버라이드 가능)",
                     kosdaq_change, config.MARKET_INDEX_BLOCK_PCT)
-        bot.send_message(
-            f"🛑 KOSDAQ {kosdaq_change:+.1f}% — 시장 하락으로 모멘텀 진입 차단"
-        )
-        return None
 
     late = _is_late_session()
     if late and config.LATE_SESSION_REQUIRE_PROFIT:
@@ -395,6 +392,24 @@ def _try_momentum_entry(
         score_msg = f"1위 {name} 스코어 {m_score:.1f} < 최소 {min_score}"
         _last_momentum_scan_summary = f"{score_msg}\n{scan_info}" if scan_info else score_msg
         return None
+
+    # KOSDAQ 하락 차단: 스코어가 오버라이드 기준 이상이면 진입 허용
+    if _kosdaq_blocked:
+        if m_score >= config.MARKET_INDEX_OVERRIDE_SCORE:
+            logger.info("KOSDAQ %.1f%% 하락이지만 스코어 %.1f ≥ %d — 차단 오버라이드",
+                        kosdaq_change, m_score, config.MARKET_INDEX_OVERRIDE_SCORE)
+            bot.send_message(
+                f"⚡ KOSDAQ {kosdaq_change:+.1f}% 하락이지만\n"
+                f"{name} 스코어 {m_score:.1f} ≥ {config.MARKET_INDEX_OVERRIDE_SCORE} — 진입 허용"
+            )
+        else:
+            logger.info("KOSDAQ %.1f%% + 스코어 %.1f < %d — 모멘텀 차단",
+                        kosdaq_change, m_score, config.MARKET_INDEX_OVERRIDE_SCORE)
+            bot.send_message(
+                f"🛑 KOSDAQ {kosdaq_change:+.1f}% 하락 + "
+                f"{name} 스코어 {m_score:.1f} < {config.MARKET_INDEX_OVERRIDE_SCORE} — 진입 차단"
+            )
+            return None
 
     # --- 초반 모드: 고스코어 + 고점 근처면 풀백 없이 즉시 진입 ---
     skip_pullback = False
