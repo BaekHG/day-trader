@@ -50,13 +50,13 @@ AFTERNOON_MAX_HOLD_MINUTES = int(os.getenv("AFTERNOON_MAX_HOLD_MINUTES", "20"))
 AFTERNOON_MIN_STOP_LOSS_PCT = float(os.getenv("AFTERNOON_MIN_STOP_LOSS_PCT", "1.5"))
 AFTERNOON_CYCLE_COOLDOWN = int(os.getenv("AFTERNOON_CYCLE_COOLDOWN", "600"))  # 900→600초(10분)
 # 눌림목 전략 전용 파라미터
-PULLBACK_MIN_MORNING_CHANGE = float(os.getenv("PULLBACK_MIN_MORNING_CHANGE", "8.0"))  # 오전 최소 등락률 8%+
-PULLBACK_RETRACEMENT_MIN = float(os.getenv("PULLBACK_RETRACEMENT_MIN", "0.30"))  # 고점 대비 최소 30% 되돌림
-PULLBACK_RETRACEMENT_MAX = float(os.getenv("PULLBACK_RETRACEMENT_MAX", "0.60"))  # 최대 60% (그 이상=추세 꺾임)
+PULLBACK_MIN_MORNING_CHANGE = float(os.getenv("PULLBACK_MIN_MORNING_CHANGE", "5.0"))  # 8→5%: 더 많은 종목 대상
+PULLBACK_RETRACEMENT_MIN = float(os.getenv("PULLBACK_RETRACEMENT_MIN", "0.20"))  # 30→20%: 살짝 눈림도 매수
+PULLBACK_RETRACEMENT_MAX = float(os.getenv("PULLBACK_RETRACEMENT_MAX", "0.65"))  # 60→65%: 조금 더 여유
 PULLBACK_TARGET_PCT = float(os.getenv("PULLBACK_TARGET_PCT", "3.0"))  # 고정 목표 +3%
 PULLBACK_STOP_LOSS_PCT = float(os.getenv("PULLBACK_STOP_LOSS_PCT", "1.5"))  # 손절 -1.5%
-PULLBACK_BOUNCE_CONFIRM_PCT = float(os.getenv("PULLBACK_BOUNCE_CONFIRM_PCT", "0.5"))  # 저점 대비 +0.5% 반등 확인
-PULLBACK_MAX_ENTRIES = int(os.getenv("PULLBACK_MAX_ENTRIES", "1"))  # 오후 최대 진입 1회
+PULLBACK_BOUNCE_CONFIRM_PCT = float(os.getenv("PULLBACK_BOUNCE_CONFIRM_PCT", "0.3"))  # 0.5→0.3%: 매수 진입 빨라짐
+PULLBACK_MAX_ENTRIES = int(os.getenv("PULLBACK_MAX_ENTRIES", "3"))  # 1→3회: 눌림목 최대 3번 진입
 
 MIN_STOP_LOSS_PCT = float(os.getenv("MIN_STOP_LOSS_PCT", "1.2"))
 MAX_ENTRY_DEVIATION_PCT = float(os.getenv("MAX_ENTRY_DEVIATION_PCT", "3.0"))  # 현재가 vs 지정가 허용 괴리 (%)

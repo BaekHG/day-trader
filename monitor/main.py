@@ -1113,7 +1113,7 @@ def _run_afternoon_phase(
     trader: Trader, monitor: PositionMonitor,
     sold_codes: set, consecutive_losses: int,
 ):
-    """오후 눌림목 반등 전략."""
+    """오후 전략: 모멘텀 + 눌림목 병행."""
     # 급등주 데이터 없으면 현재 시장에서 직접 스캔
     global _morning_top_movers
     if not _morning_top_movers:
@@ -1144,45 +1144,67 @@ def _run_afternoon_phase(
         except Exception as e:
             logger.warning("시장 스캔 실패: %s", e)
 
-    logger.info("━━━ 오후 눌림목 전략 시작 (%s ~ %s) ━━━",
+    logger.info("━━━ 오후 전략 시작 (%s ~ %s) — 모멘텀 + 눌림목 ━━━",
                 config.AFTERNOON_PHASE_START, config.AFTERNOON_PHASE_END)
-    names = ", ".join(m["name"] for m in _morning_top_movers[:5]) if _morning_top_movers else "없음"
+    pullback_names = ", ".join(m["name"] for m in _morning_top_movers[:5]) if _morning_top_movers else "없음"
     bot.send_message(
-        f"📉 <b>오후 눌림목 전략 시작</b>\n"
-        f"대상: {names}\n"
+        f"📈 <b>오후 전략 시작</b> (모멘텀 + 눌림목)\n"
+        f"눌림목 대상: {pullback_names}\n"
         f"포지션: {config.AFTERNOON_MAX_POSITION_PCT}% | "
         f"목표: +{config.PULLBACK_TARGET_PCT}% | "
         f"손절: -{config.PULLBACK_STOP_LOSS_PCT}%"
     )
 
-    pullback_entries = 0
+    afternoon_entries = 0
     cycle = 0
     while not _past_afternoon_cutoff() and cycle < config.AFTERNOON_MAX_CYCLES:
         cycle += 1
 
         daily_pnl = _get_daily_pnl_pct(monitor)
         if daily_pnl <= config.DAILY_LOSS_LIMIT_PCT:
-            bot.send_message(f"🛑 일일 손실한도 ({daily_pnl:.1f}%) — 눌림목 중단")
-            break
-        if pullback_entries >= config.PULLBACK_MAX_ENTRIES:
-            bot.send_message(f"📉 눌림목 {pullback_entries}회 진입 완료 — 종료")
+            bot.send_message(f"🛑 일일 손실한도 ({daily_pnl:.1f}%) — 오후 중단")
             break
 
         if not monitor.positions:
-            result = _try_pullback_entry(kis, bot, db, trader, monitor, sold_codes)
-            if result == "pullback_entered":
-                pullback_entries += 1
+            entered = False
+
+            # 1) 눌림목 먼저 시도
+            if _morning_top_movers:
+                result = _try_pullback_entry(kis, bot, db, trader, monitor, sold_codes)
+                if result == "pullback_entered":
+                    entered = True
+                    afternoon_entries += 1
+
+            # 2) 눌림목 없으면 모멘텀 시도
+            if not entered and not monitor.positions:
+                try:
+                    market_data = collector.fetch_market_data(phase="afternoon")
+                except Exception as e:
+                    logger.warning("오후 시장데이터 수집 실패: %s", e)
+                    market_data = None
+                if market_data:
+                    momentum_result = _try_momentum_entry(
+                        kis, bot, db, collector, trader, monitor, sold_codes, market_data,
+                        consecutive_losses=consecutive_losses,
+                    )
+                    if momentum_result == "momentum_entered":
+                        entered = True
+                        afternoon_entries += 1
+
+            # 진입 성공 → 모니터링
+            if entered:
                 _run_monitoring_loop(
-                    monitor, bot, kis, collector, analyzer, trader, sold_codes, phase="pullback",
+                    monitor, bot, kis, collector, analyzer, trader, sold_codes,
+                    phase="afternoon",
                 )
                 for t in monitor.trades_today:
-                    if t.get("phase") == "pullback" and t.get("pnl_amt", 0) < 0 and "code" in t:
+                    if t.get("pnl_amt", 0) < 0 and "code" in t:
                         sold_codes.add(t["code"])
                 continue
 
         if not _past_afternoon_cutoff():
             cooldown = config.AFTERNOON_CYCLE_COOLDOWN
-            bot.send_message(f"⏸ 눌림목 대기 — {cooldown // 60}분 후 재스캔")
+            bot.send_message(f"⏸ 오후 대기 — {cooldown // 60}분 후 재스캔")
             cooldown_end = time.time() + cooldown
             while time.time() < cooldown_end:
                 try:
@@ -1192,7 +1214,6 @@ def _run_afternoon_phase(
                 if monitor.should_stop or _past_afternoon_cutoff():
                     break
                 time.sleep(min(30, cooldown_end - time.time()))
-
 
 def _run_one_cycle(
     cycle: int,
