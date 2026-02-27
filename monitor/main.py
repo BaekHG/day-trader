@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 import sys
 import time
 from datetime import datetime, timedelta
@@ -204,6 +205,33 @@ def _is_early_morning() -> bool:
 # 모멘텀 스캔 요약 (사이클 메시지에서 참조)
 _last_momentum_scan_summary = ""
 _morning_top_movers: list[dict] = []  # 오전 급등주 추적
+_MOVERS_FILE = os.path.join(os.path.dirname(__file__) or '.', '.morning_top_movers.json')
+
+
+def _save_morning_top_movers():
+    """오전 급등주 데이터를 파일에 저장 (재시작 복구용)."""
+    try:
+        with open(_MOVERS_FILE, 'w') as f:
+            json.dump({'date': now_kst().strftime('%Y-%m-%d'), 'movers': _morning_top_movers}, f, ensure_ascii=False)
+    except Exception as e:
+        logger.warning('급등주 저장 실패: %s', e)
+
+
+def _load_morning_top_movers():
+    """파일에서 오전 급등주 데이터 복구. 당일 데이터만 로드."""
+    global _morning_top_movers
+    try:
+        with open(_MOVERS_FILE, 'r') as f:
+            data = json.load(f)
+        if data.get('date') == now_kst().strftime('%Y-%m-%d'):
+            _morning_top_movers = data.get('movers', [])
+            logger.info('오전 급등주 복구: %d종목', len(_morning_top_movers))
+        else:
+            logger.info('급등주 데이터 날짜 불일치 — 무시')
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.warning('급등주 복구 실패: %s', e)
 
 # --- 불장 모드 (Market Boost) 상태 ---
 _boost_state = {
@@ -361,6 +389,8 @@ def _try_momentum_entry(
                     "prev_close": s_prev_close,
                 })
 
+    if _morning_top_movers:
+        _save_morning_top_movers()
     if not momentum_stocks:
         _last_momentum_scan_summary = getattr(collector, 'last_scan_summary', '후보 없음')
         return None
@@ -905,6 +935,9 @@ def run_daily_cycle():
     analyzer = AIAnalyzer(ai_key, provider=config.AI_PROVIDER)
     trader = Trader(kis, bot, db)
     monitor = PositionMonitor(kis, bot, db)
+
+    # 오전 급등주 데이터 복구 (장중 재시작 대비)
+    _load_morning_top_movers()
 
     if not config.DRY_RUN:
         logger.info("KIS 잔고 ↔ positions.json 동기화")
