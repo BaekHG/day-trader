@@ -1114,6 +1114,36 @@ def _run_afternoon_phase(
     sold_codes: set, consecutive_losses: int,
 ):
     """오후 눌림목 반등 전략."""
+    # 급등주 데이터 없으면 현재 시장에서 직접 스캔
+    global _morning_top_movers
+    if not _morning_top_movers:
+        logger.info("오전 급등주 데이터 없음 — 현재 시장 스캔으로 대체")
+        try:
+            raw = collector.kis.get_fluctuation_ranking_filtered(
+                rate_min=config.PULLBACK_MIN_MORNING_CHANGE,
+                rate_max=30.0, price_min=config.MOMENTUM_MIN_PRICE,
+                vol_min=config.MOMENTUM_MIN_VOLUME,
+            )
+            for s in (raw or [])[:10]:
+                s_code = s.get("mksc_shrn_iscd") or s.get("stck_shrn_iscd", "")
+                s_change = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
+                s_high = int(str(s.get("stck_hgpr", 0)).replace(",", "") or 0)
+                s_cur = int(str(s.get("stck_prpr", 0)).replace(",", "") or 0)
+                s_prev = int(s_cur / (1 + s_change / 100)) if s_change > 0 and s_cur > 0 else 0
+                if s_code and s_change >= config.PULLBACK_MIN_MORNING_CHANGE:
+                    _morning_top_movers.append({
+                        "code": s_code,
+                        "name": s.get("hts_kor_isnm", "?"),
+                        "morning_high": s_high,
+                        "morning_high_pct": s_change,
+                        "prev_close": s_prev,
+                    })
+            if _morning_top_movers:
+                _save_morning_top_movers()
+                logger.info("시장 스캔으로 급등주 %d종목 확보", len(_morning_top_movers))
+        except Exception as e:
+            logger.warning("시장 스캔 실패: %s", e)
+
     logger.info("━━━ 오후 눌림목 전략 시작 (%s ~ %s) ━━━",
                 config.AFTERNOON_PHASE_START, config.AFTERNOON_PHASE_END)
     names = ", ".join(m["name"] for m in _morning_top_movers[:5]) if _morning_top_movers else "없음"
