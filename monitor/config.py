@@ -172,7 +172,8 @@ EARLY_FALLBACK_OPEN_TOLERANCE = float(os.getenv("EARLY_FALLBACK_OPEN_TOLERANCE",
 EARLY_SKIP_PULLBACK_SCORE = int(os.getenv("EARLY_SKIP_PULLBACK_SCORE", "40"))  # 이 스코어 이상이면 풀백 없이 즉시 진입
 EARLY_SKIP_PULLBACK_HIGH_RATIO = float(os.getenv("EARLY_SKIP_PULLBACK_HIGH_RATIO", "0.97"))  # 고점 대비 97% 이상일 때만
 
-MARKET_INDEX_BLOCK_PCT = -1.0   # KOSDAQ 이 값 이하 시 모멘텀 진입 차단
+MARKET_INDEX_BLOCK_PCT = float(os.getenv("MARKET_INDEX_BLOCK_PCT", "-2.5"))  # KOSDAQ 하락 시 모멘텀 차단 기준 (%)
+MARKET_INDEX_OVERRIDE_SCORE = int(os.getenv("MARKET_INDEX_OVERRIDE_SCORE", "70"))  # 이 스코어 이상이면 차단 무시
 
 
 # --- 불장 모드 (Market Boost) — 시장 강세/호재 뉴스 감지 시 공격적 파라미터 ---
