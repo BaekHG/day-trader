@@ -129,11 +129,11 @@ MOMENTUM_MIN_PRICE = int(os.getenv("MOMENTUM_MIN_PRICE", "2000"))   # 동전주 
 MOMENTUM_MIN_VOLUME = int(os.getenv("MOMENTUM_MIN_VOLUME", "200000"))  # 최소 거래량 20만주
 MOMENTUM_PREV_DAY_MAX_CHANGE = float(os.getenv("MOMENTUM_PREV_DAY_MAX_CHANGE", "12.0"))  # 전일 +12%↑ → 연속급등 제외
 MOMENTUM_MIN_HIGH_RATIO = float(os.getenv("MOMENTUM_MIN_HIGH_RATIO", "0.93"))  # 고점 대비 93% 이상 유지
-MOMENTUM_VOL_SUSTAIN_RATIO = float(os.getenv("MOMENTUM_VOL_SUSTAIN_RATIO", "0.7"))  # 최근봉 거래량 ≥ 직전봉 × 0.7
+MOMENTUM_VOL_SUSTAIN_RATIO = float(os.getenv("MOMENTUM_VOL_SUSTAIN_RATIO", "0.5"))  # 0.7→0.5: 5분봉 거래량 변동 크므로 50%까지 허용
 MOMENTUM_ENTRY_START = os.getenv("MOMENTUM_ENTRY_START", "09:02")   # 모멘텀 진입 시작
 MOMENTUM_ENTRY_END = os.getenv("MOMENTUM_ENTRY_END", "14:30")       # 모멘텀 진입 종료
 MOMENTUM_STOP_LOSS_PCT = float(os.getenv("MOMENTUM_STOP_LOSS_PCT", "2.5"))  # 모멘텀 손절 기본값
-MOMENTUM_MIN_SCORE = int(os.getenv("MOMENTUM_MIN_SCORE", "50"))
+MOMENTUM_MIN_SCORE = int(os.getenv("MOMENTUM_MIN_SCORE", "40"))  # 50→40: 한국첨단소재(35.2) 같은 유효 후보 놓치지 않도록
 MOMENTUM_STOP_LOSS_BY_SCORE = [
     (70, 3.5),   # 스코어 70+ → -3.5% (확신 높음, 버틴다)
     (50, 2.5),   # 스코어 50~69 → -2.5% (기본)
@@ -143,7 +143,7 @@ MOMENTUM_TIME_STOP_MIN_PROFIT = float(os.getenv("MOMENTUM_TIME_STOP_MIN_PROFIT",
 MOMENTUM_DAILY_MAX_LOSSES = int(os.getenv("MOMENTUM_DAILY_MAX_LOSSES", "2"))  # 하루 모멘텀 손절 2회 → 당일 중단
 MOMENTUM_OPTIMAL_CHANGE_MIN = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MIN", "8.0"))  # 스코어링: 최적 등락률 하한
 MOMENTUM_OPTIMAL_CHANGE_MAX = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MAX", "15.0"))  # 스코어링: 최적 등락률 상한
-MOMENTUM_VOL_GATE = float(os.getenv("MOMENTUM_VOL_GATE", "2.0"))  # 시간보정 거래량비 최소 게이트 (ln스케일)
+MOMENTUM_VOL_GATE = float(os.getenv("MOMENTUM_VOL_GATE", "1.5"))  # 2.0→1.5: 장 초반 전일대비 2.7배 요구는 과도 (1.65배로 완화)
 
 # 모멘텀 트레일링 스톱 (일반보다 넓음 — 모멘텀주 정상 변동폭 수용)
 MOMENTUM_TRAILING_STOP_LEVELS = [
@@ -163,10 +163,10 @@ LATE_SESSION_REQUIRE_PROFIT = os.getenv("LATE_SESSION_REQUIRE_PROFIT", "false").
 
 # --- 장 초반 빠른 진입 모드 (09:00~09:10) ---
 # 초반 10분간 모멘텀 진입 조건 완화: 낮은 스코어/등락률도 진입 허용
-EARLY_MORNING_MINUTES = int(os.getenv("EARLY_MORNING_MINUTES", "10"))
+EARLY_MORNING_MINUTES = int(os.getenv("EARLY_MORNING_MINUTES", "20"))  # 10→20분: 09:14 한국첨단소재 35.2점 놓친 사례 반영
 EARLY_MOMENTUM_RATE_MIN = float(os.getenv("EARLY_MOMENTUM_RATE_MIN", "3.0"))  # 소싱 등락률 하한 3% (평시 5%)
 EARLY_MOMENTUM_MIN_SCORE = int(os.getenv("EARLY_MOMENTUM_MIN_SCORE", "35"))  # 최소 스코어 35 (평시 50)
-EARLY_MOMENTUM_VOL_GATE = float(os.getenv("EARLY_MOMENTUM_VOL_GATE", "1.5"))  # 거래량 게이트 1.5 (평시 2.0)
+EARLY_MOMENTUM_VOL_GATE = float(os.getenv("EARLY_MOMENTUM_VOL_GATE", "1.0"))  # 1.5→1.0: 초반 거래량 불안정, 최소한만 확인
 EARLY_CYCLE_COOLDOWN = int(os.getenv("EARLY_CYCLE_COOLDOWN", "90"))  # 쿨다운 90초 (평시 180초)
 EARLY_FALLBACK_OPEN_TOLERANCE = float(os.getenv("EARLY_FALLBACK_OPEN_TOLERANCE", "0.005"))  # 시가 대비 0.5% 하회 허용
 EARLY_SKIP_PULLBACK_SCORE = int(os.getenv("EARLY_SKIP_PULLBACK_SCORE", "40"))  # 이 스코어 이상이면 풀백 없이 즉시 진입
