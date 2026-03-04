@@ -103,18 +103,9 @@ class PositionMonitor:
                     continue
 
 
-            # 눌림목 포지션: 고정 목표가 + 빠른 손절
+            # 눌림목 포지션: 손절만 빠르게, 매도는 트레일링으로 (고정 목표 제거)
             is_pullback = pos.get("phase") == "pullback"
             if is_pullback:
-                sell_strategy = pos.get("sell_strategy", {})
-                target_pct = sell_strategy.get("target_pct", config.PULLBACK_TARGET_PCT)
-                target_price = int(entry * (1 + target_pct / 100))
-
-                if current >= target_price:
-                    self._execute_sell(code, pos, remaining, current,
-                        f"눌림목 목표 달성 +{target_pct}%", pnl_pct)
-                    continue
-
                 pullback_stop = int(entry * (1 - config.PULLBACK_STOP_LOSS_PCT / 100))
                 if current <= pullback_stop:
                     self._execute_sell(code, pos, remaining, current, "눌림목 손절", pnl_pct)
@@ -128,10 +119,7 @@ class PositionMonitor:
                         self._execute_sell(code, pos, remaining, current,
                             f"눌림목 {config.AFTERNOON_MAX_HOLD_MINUTES}분 횡보", pnl_pct)
                         continue
-
-                logger.info("눌림목 %s | %s원 (%.1f%%) | 목표 %s | 잔량 %d주",
-                    pos["name"], f"{current:,}", pnl_pct, f"{target_price:,}", remaining)
-                continue  # Skip trailing stop for pullback
+                # 트레일링 스탑은 아래 공통 로직에서 처리 (fall through)
 
             # 불장 모드 확인 (순환 import 회피)
             _boosted = False
