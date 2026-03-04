@@ -1097,6 +1097,9 @@ def run_daily_cycle():
             )
             wait_until(config.AFTERNOON_PHASE_START, bot, kis, monitor)
 
+        # 오전 연패 기록 리셋 — 오후는 별도 세션으로 취급
+        consecutive_losses = 0
+
         if not monitor.should_stop and not _past_afternoon_cutoff():
             _run_afternoon_phase(
                 kis, bot, db, collector, analyzer, trader, monitor,

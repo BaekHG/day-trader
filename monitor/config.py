@@ -72,7 +72,7 @@ MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "30"))
 # --- 일일 리스크 관리 (보수적) ---
 DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "-1.5"))
 DAILY_PROFIT_TARGET_PCT = float(os.getenv("DAILY_PROFIT_TARGET_PCT", "5.0"))  # 일일 누적 수익 상한 (안전망)
-MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "2"))  # 연패 시 당일 중단
+MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "4"))  # 2→4: 공격적 전략 — 4연패까지 허용
 MIN_CONFIDENCE_AFTER_LOSS = int(os.getenv("MIN_CONFIDENCE_AFTER_LOSS", "75"))  # 손절 후 다음 사이클 최소 신뢰도
 
 # --- 사이클별 분기 전략 ---
@@ -140,7 +140,7 @@ MOMENTUM_STOP_LOSS_BY_SCORE = [
 ]
 MOMENTUM_TIME_STOP_MINUTES = int(os.getenv("MOMENTUM_TIME_STOP_MINUTES", "20"))  # 20분 횡보 시 청산
 MOMENTUM_TIME_STOP_MIN_PROFIT = float(os.getenv("MOMENTUM_TIME_STOP_MIN_PROFIT", "0.5"))  # 20분 후 +0.5% 미만이면 청산
-MOMENTUM_DAILY_MAX_LOSSES = int(os.getenv("MOMENTUM_DAILY_MAX_LOSSES", "2"))  # 하루 모멘텀 손절 2회 → 당일 중단
+MOMENTUM_DAILY_MAX_LOSSES = int(os.getenv("MOMENTUM_DAILY_MAX_LOSSES", "6"))  # 2→6: 오전+오후 하루 종일 매매 — 손절 6회까지 허용
 MOMENTUM_OPTIMAL_CHANGE_MIN = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MIN", "8.0"))  # 스코어링: 최적 등락률 하한
 MOMENTUM_OPTIMAL_CHANGE_MAX = float(os.getenv("MOMENTUM_OPTIMAL_CHANGE_MAX", "15.0"))  # 스코어링: 최적 등락률 상한
 MOMENTUM_VOL_GATE = float(os.getenv("MOMENTUM_VOL_GATE", "1.5"))  # 2.0→1.5: 장 초반 전일대비 2.7배 요구는 과도 (1.65배로 완화)
