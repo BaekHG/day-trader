@@ -317,9 +317,18 @@ class Trader:
             logger.error("체결 조회 실패: %s", e)
             return None
 
-        order_codes = {o["stock_code"] for o in orders}
+        # 주문번호(odno)로 매칭 — 동일 종목 이전 체결 중복 방지
+        order_odnos = {o["odno"] for o in orders if o.get("odno")}
         fills = []
-        for f in fills_raw:
-            if f["stock_code"] in order_codes and f["quantity"] > 0:
-                fills.append(f)
+        if order_odnos:
+            # odno로 정확히 매칭 (정상 케이스)
+            for f in fills_raw:
+                if f.get("odno") in order_odnos and f["quantity"] > 0:
+                    fills.append(f)
+        else:
+            # odno 없으면 stock_code fallback (하위 호환)
+            order_codes = {o["stock_code"] for o in orders}
+            for f in fills_raw:
+                if f["stock_code"] in order_codes and f["quantity"] > 0:
+                    fills.append(f)
         return fills

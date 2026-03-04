@@ -37,7 +37,8 @@ TRAILING_STOP_LEVELS = [
 # --- 멀티사이클 ---
 MAX_CYCLES = int(os.getenv("MAX_CYCLES", "10"))
 NO_NEW_ENTRY_AFTER = os.getenv("NO_NEW_ENTRY_AFTER", "10:30")  # 10:30 이후 신규 진입 차단
-FORCE_CLOSE_TIME = "15:10"     # 전량 강제 청산
+FORCE_CLOSE_TIME = "15:10"     # 손실 종목 강제 청산 (수익 종목은 트레일링 유지)
+FINAL_CLOSE_TIME = "15:20"    # 전량 강제 청산 (체결 여유 10분 확보)
 CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "180"))  # 사이클 간 쿨다운 (초)
 
 # --- 오후 전략: 눌림목 반등 매매 (10:30~14:00) ---

@@ -241,6 +241,7 @@ class KISClient:
                     "stock_code": item.get("pdno", ""), "name": item.get("prdt_name", ""),
                     "quantity": qty, "price": int(float(item.get("avg_prvs", 0))),
                     "amount": int(item.get("tot_ccld_amt", 0)),
+                    "odno": item.get("odno", ""),  # 주문번호 — 동일 종목 중복체결 구분용
                 })
         return fills
 

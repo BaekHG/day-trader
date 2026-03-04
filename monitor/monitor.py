@@ -63,7 +63,7 @@ class PositionMonitor:
 
     def _check_positions_locked(self):
         now = datetime.now(KST)
-        force_hh, force_mm = map(int, config.FORCE_CLOSE_TIME.split(":"))
+        force_hh, force_mm = map(int, config.FORCE_CLOSE_TIME.split(":"))  # 15:10 — 손실 종목 청산
 
         for code, pos in list(self.positions.items()):
             # 수동 매수 포지션은 모니터링 완전 스킵 (유저가 직접 관리)
@@ -87,8 +87,18 @@ class PositionMonitor:
             remaining = pos["remaining_qty"]
             pnl_pct = (current - entry) / entry * 100 if entry else 0
 
-            if now.hour > force_hh or (now.hour == force_hh and now.minute >= force_mm):
-                self._execute_sell(code, pos, remaining, current, f"{config.FORCE_CLOSE_TIME} 강제 청산", pnl_pct)
+            # --- 장 마감 2단계 청산 ---
+            final_hh, final_mm = map(int, config.FINAL_CLOSE_TIME.split(":"))  # 15:20
+            is_final = now.hour > final_hh or (now.hour == final_hh and now.minute >= final_mm)
+            is_force = now.hour > force_hh or (now.hour == force_hh and now.minute >= force_mm)
+
+            if is_final:
+                # 15:20 — 전량 강제 청산 (체결 여유 10분 확보)
+                self._execute_sell(code, pos, remaining, current, f"{config.FINAL_CLOSE_TIME} 전량 강제 청산", pnl_pct)
+                continue
+            elif is_force and pnl_pct <= 0:
+                # 15:10 — 손실 종목만 청산 (수익 종목은 트레일링 유지)
+                self._execute_sell(code, pos, remaining, current, f"{config.FORCE_CLOSE_TIME} 손실 청산 (수익종목 트레일링 유지)", pnl_pct)
                 continue
 
             is_momentum = pos.get("is_momentum", False)
