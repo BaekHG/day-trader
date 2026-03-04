@@ -965,6 +965,72 @@ def run_daily_cycle():
         if "code" in t and t.get("pnl_amt", 0) < 0:
             sold_codes.add(t["code"])
 
+    # --- 오버나이트 포지션 갭 체크 (09:05) ---
+    overnight_positions = {c: p for c, p in monitor.positions.items() if p.get("overnight")}
+    if overnight_positions and not config.DRY_RUN:
+        logger.info("오버나이트 포지션 %d개 감지 — %s 갭 체크 대기",
+                    len(overnight_positions), config.OVERNIGHT_MORNING_CHECK)
+        bot.send_message(
+            f"🌙 오버나이트 포지션 {len(overnight_positions)}개 — "
+            f"{config.OVERNIGHT_MORNING_CHECK} 갭 체크 예정\n"
+            + "\n".join(f"  {p['name']} {p['remaining_qty']}주" for p in overnight_positions.values())
+        )
+        wait_until(config.OVERNIGHT_MORNING_CHECK, bot, kis, monitor)
+        for code, pos in list(overnight_positions.items()):
+            try:
+                price_data = kis.get_current_price(code)
+                current = price_data["price"]
+                overnight_close = pos.get("overnight_close_price", pos["entry_price"])
+                gap_pct = (current - overnight_close) / overnight_close * 100 if overnight_close > 0 else 0
+                entry = pos["entry_price"]
+                total_pnl_pct = (current - entry) / entry * 100 if entry > 0 else 0
+
+                if gap_pct <= config.OVERNIGHT_GAP_DOWN_SELL_PCT:
+                    # 갭다운 → 즉시 매도
+                    logger.info("%s 갭다운 %.1f%% — 즉시 매도", pos["name"], gap_pct)
+                    bot.send_message(
+                        f"🚨 <b>{pos['name']} 갭다운 — 즉시 매도</b>\n\n"
+                        f"전일 종가: {overnight_close:,}원 → 현재: {current:,}원 ({gap_pct:+.1f}%)\n"
+                        f"전체 수익: {total_pnl_pct:+.1f}%"
+                    )
+                    remaining = pos["remaining_qty"]
+                    try:
+                        sell_result = kis.place_sell_order(code, remaining)
+                        if sell_result.get("rt_cd") == "0":
+                            monitor.trades_today.append({
+                                "code": code, "name": pos["name"],
+                                "action": "sell", "quantity": remaining,
+                                "entry_price": entry, "exit_price": current,
+                                "pnl_pct": total_pnl_pct,
+                                "pnl_amt": int((current - entry) * remaining),
+                                "reason": f"오버나이트 갭다운 {gap_pct:+.1f}%",
+                                "phase": "overnight",
+                            })
+                            del monitor.positions[code]
+                            monitor._save_positions()
+                            if db:
+                                db.save_trade(code, pos["name"], "sell", remaining, current,
+                                              reason=f"오버나이트 갭다운 {gap_pct:+.1f}%")
+                        else:
+                            bot.send_message(f"⚠️ {pos['name']} 매도 실패: {sell_result.get('msg1', '')}")
+                    except Exception as e:
+                        logger.error("오버나이트 매도 실패 %s: %s", pos["name"], e)
+                        bot.send_message(f"⚠️ {pos['name']} 오버나이트 매도 오류: {e}")
+                else:
+                    # 갭업/보합 → 트레일링 유지
+                    pos["overnight"] = False  # 플래그 해제 — 일반 모니터링으로 전환
+                    monitor._save_positions()
+                    logger.info("%s 갭 %+.1f%% — 트레일링 유지 (전체 %+.1f%%)",
+                                pos["name"], gap_pct, total_pnl_pct)
+                    bot.send_message(
+                        f"✅ <b>{pos['name']} 오버나이트 유지</b>\n\n"
+                        f"전일 종가: {overnight_close:,}원 → 현재: {current:,}원 ({gap_pct:+.1f}%)\n"
+                        f"전체 수익: {total_pnl_pct:+.1f}% — 트레일링 스탑으로 모니터링"
+                    )
+            except Exception as e:
+                logger.error("오버나이트 체크 실패 %s: %s", pos.get("name", code), e)
+
+
     if monitor.positions and past_analysis_time():
         logger.info("기존 포지션 %d개 감지 — 모니터링 재개", len(monitor.positions))
         bot.send_message(

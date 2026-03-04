@@ -93,7 +93,21 @@ class PositionMonitor:
             is_force = now.hour > force_hh or (now.hour == force_hh and now.minute >= force_mm)
 
             if is_final:
-                # 15:20 — 전량 강제 청산 (체결 여유 10분 확보)
+                # 15:20 — 오버나이트 조건 충족 시 홀딩, 아니면 전량 청산
+                if config.OVERNIGHT_ENABLED and pnl_pct >= config.OVERNIGHT_MIN_PROFIT_PCT:
+                    high_ratio = current / pos["high_since_entry"] if pos.get("high_since_entry", 0) > 0 else 0
+                    if high_ratio >= config.OVERNIGHT_MIN_HIGH_RATIO:
+                        pos["overnight"] = True
+                        pos["overnight_close_price"] = current
+                        self._save_positions()
+                        logger.info("%s 오버나이트 홀딩 — 수익 %.1f%%, 고점비 %.1f%%", pos["name"], pnl_pct, high_ratio * 100)
+                        self.bot.send_message(
+                            f"🌙 <b>{pos['name']} 오버나이트 홀딩</b>\n\n"
+                            f"수익: {pnl_pct:+.1f}% ({current:,}원)\n"
+                            f"고점비: {high_ratio * 100:.1f}%\n"
+                            f"내일 {config.OVERNIGHT_MORNING_CHECK} 갭 체크 예정"
+                        )
+                        continue
                 self._execute_sell(code, pos, remaining, current, f"{config.FINAL_CLOSE_TIME} 전량 강제 청산", pnl_pct)
                 continue
             elif is_force and pnl_pct <= 0:

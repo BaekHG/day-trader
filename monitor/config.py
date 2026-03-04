@@ -39,6 +39,13 @@ MAX_CYCLES = int(os.getenv("MAX_CYCLES", "10"))
 NO_NEW_ENTRY_AFTER = os.getenv("NO_NEW_ENTRY_AFTER", "10:30")  # 10:30 이후 신규 진입 차단
 FORCE_CLOSE_TIME = "15:10"     # 손실 종목 강제 청산 (수익 종목은 트레일링 유지)
 FINAL_CLOSE_TIME = "15:20"    # 전량 강제 청산 (체결 여유 10분 확보)
+
+# --- 조건부 오버나이트 홀딩 ---
+OVERNIGHT_ENABLED = os.getenv("OVERNIGHT_ENABLED", "true").lower() == "true"
+OVERNIGHT_MIN_PROFIT_PCT = float(os.getenv("OVERNIGHT_MIN_PROFIT_PCT", "5.0"))  # 수익 +5% 이상이면 홀딩 후보
+OVERNIGHT_MIN_HIGH_RATIO = float(os.getenv("OVERNIGHT_MIN_HIGH_RATIO", "0.95"))  # 고점 대비 95% 이상 유지 중이어야 홀딩
+OVERNIGHT_MORNING_CHECK = os.getenv("OVERNIGHT_MORNING_CHECK", "09:05")  # 다음날 갭 체크 시각
+OVERNIGHT_GAP_DOWN_SELL_PCT = float(os.getenv("OVERNIGHT_GAP_DOWN_SELL_PCT", "-2.0"))  # 갭다운 -2% 이하면 즉시 매도
 CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "180"))  # 사이클 간 쿨다운 (초)
 
 # --- 오후 전략: 눌림목 반등 매매 (10:30~14:00) ---
