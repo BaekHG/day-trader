@@ -467,6 +467,9 @@ class MarketDataCollector:
             s["momentum_score"] = momentum_score
             s["score"] = int(momentum_score)
             s["trend_bonus"] = trend_bonus
+            s["_vol_ratio"] = round(raw_vol_ratio, 1)
+            s["_high_ratio"] = round(hold_ratio, 4)
+            s["_theme_label"] = theme_label
             s["score_detail"] = {
                 "total": int(momentum_score),
                 "breakdown": (

@@ -178,17 +178,21 @@ class TelegramBot:
         lines.append(f"\n총 주문: {total:,}원 / {config.TOTAL_CAPITAL:,}원")
         self.send_message("\n".join(lines))
 
-    def send_fill_confirmation(self, fills: list[dict]):
+    def send_fill_confirmation(self, fills: list[dict], strategy: str = ""):
         if not fills:
             self.send_message("⚠️ 체결된 주문이 없습니다.")
             return
-        lines = ["✅ 체결 완료\n"]
+        strategy_label = {
+            'momentum': '🚀 모멘텀',
+            'pullback': '📉 눌림목 반등',
+        }.get(strategy, '✅')
+        lines = [f"{strategy_label} <b>체결 완료</b>\n"]
         total = 0
         for f in fills:
             lines.append(f"{f['name']} {f['quantity']}주 × {f['price']:,}원")
-            total += f.get("amount", f["quantity"] * f["price"])
+            total += f.get('amount', f['quantity'] * f['price'])
         lines.append(f"\n총 투입: {total:,}원\n모니터링 시작 🔍")
-        self.send_message("\n".join(lines))
+        self.send_message('\n'.join(lines))
 
     def send_daily_report(self, summary: str):
         self.send_message(summary)

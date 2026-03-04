@@ -542,13 +542,77 @@ def _try_momentum_entry(
         "is_momentum": True,
     }
 
-    bot.send_message(
-        f"🚀 <b>모멘텀 매수 진행</b>\n\n"
-        f"{name} {quantity}주 × {order_price:,}원 (상한지정가)\n"
-        f"현재가: {cur_price:,}원 / 버퍼: +1%\n"
-        f"투입금: {quantity * order_price:,}원 (자본 {pos_pct}%)\n"
-        f"손절선: {stop_loss:,}원 (-{stop_pct}%)"
-    )
+    # 매수 이유 구체화 — 숫자를 해석해서 사람이 납득할 수 있게
+    high_ratio = top.get('_high_ratio', 0)
+    if high_ratio == 0:
+        th = int(str(top.get('stck_hgpr', 0)).replace(',', '') or 0)
+        high_ratio = cur_price / th if th > 0 else 0
+    vol_ratio = top.get('_vol_ratio', 0)
+    theme_label = top.get('_theme_label', '')
+
+    # 거래량 해석
+    if vol_ratio >= 10:
+        vol_reason = f'거래량 {vol_ratio:.0f}배 폭증 — 세력/기관 유입 의심'
+    elif vol_ratio >= 5:
+        vol_reason = f'거래량 {vol_ratio:.1f}배 폭증 — 강한 매수세 유입'
+    elif vol_ratio >= 3:
+        vol_reason = f'거래량 {vol_ratio:.1f}배 급증 — 시장 관심 집중'
+    elif vol_ratio >= 2:
+        vol_reason = f'거래량 {vol_ratio:.1f}배 증가 — 평소 대비 활발'
+    else:
+        vol_reason = f'거래량 {vol_ratio:.1f}배 — 보통 수준'
+
+    # 고점비 해석
+    hr_pct = high_ratio * 100
+    if hr_pct >= 98:
+        hr_reason = f'고점 대비 {hr_pct:.1f}% — 매도 압력 약함 (강세)'
+    elif hr_pct >= 95:
+        hr_reason = f'고점 대비 {hr_pct:.1f}% — 상승 모멘텀 유지'
+    elif hr_pct >= 90:
+        hr_reason = f'고점 대비 {hr_pct:.1f}% — 소폭 조정 중'
+    else:
+        hr_reason = f'고점 대비 {hr_pct:.1f}% — 조정 진행 중'
+
+    # 스코어 해석
+    if m_score >= 60:
+        score_reason = f'스코어 {m_score:.0f}점 (1위) — 매우 강한 모멘텀'
+    elif m_score >= 40:
+        score_reason = f'스코어 {m_score:.0f}점 (1위) — 강한 모멘텀'
+    else:
+        score_reason = f'스코어 {m_score:.0f}점 (1위) — 진입 기준 충족'
+
+    # 진입 모드 해석
+    if early and skip_pullback:
+        mode_reason = '장 초반 고점유지 — 풀백 없이 즉시 진입'
+    elif skip_pullback and m_score >= config.MOMENTUM_SKIP_PULLBACK_SCORE:
+        mode_reason = f'고스코어({m_score:.0f}) 즉시 진입 — 풀백 불필요'
+    elif boosted:
+        mode_reason = '불장 모드 — 테마 수혜 공격적 진입'
+    elif late:
+        mode_reason = '후반 세션 — 보수적 배팅'
+    else:
+        mode_reason = '풀백 확인 후 진입'
+
+    reasons = [
+        f'\U0001f680 <b>모멘텀 매수 진행</b>\n',
+        f'{name} ({code}) {change_pct:+.1f}%',
+        f'',
+        f'\U0001f4ca <b>매수 이유</b>',
+        f'• {vol_reason}',
+        f'• {hr_reason}',
+        f'• {score_reason}',
+        f'• {mode_reason}',
+    ]
+    if theme_label:
+        reasons.append(f'• 테마: {theme_label}')
+    reasons += [
+        f'',
+        f'\U0001f4b0 <b>주문</b>',
+        f'{quantity}주 × {order_price:,}원 (상한지정가)',
+        f'투입: {quantity * order_price:,}원 (자본 {pos_pct}%)',
+        f'손절: {stop_loss:,}원 (-{stop_pct}%)',
+    ]
+    bot.send_message('\n'.join(reasons))
 
     results = trader.execute_buy_orders([order])
     success = [r for r in results if r["success"]]
@@ -572,7 +636,7 @@ def _try_momentum_entry(
         buy_slippage = (fill_price - cur_price) / cur_price * 100 if cur_price > 0 else 0
         adjusted_stop = int(fill_price * (1 - stop_pct / 100))
 
-        bot.send_fill_confirmation(fills)
+        bot.send_fill_confirmation(fills, strategy='momentum')
         monitor.add_position(
             stock_code=f["stock_code"],
             name=f["name"],
@@ -691,15 +755,44 @@ def _try_pullback_entry(
         stop_loss = int(current * (1 - config.PULLBACK_STOP_LOSS_PCT / 100))
         target = int(current * (1 + config.PULLBACK_TARGET_PCT / 100))
 
-        bot.send_message(
-            f"📉 <b>눌림목 반등 매수</b>\n\n"
-            f"{name} ({code})\n"
-            f"오전 고점: {morning_high:,}원 (+{mover['morning_high_pct']:.1f}%)\n"
-            f"현재가: {current:,}원 (되돌림 {retracement * 100:.0f}%)\n"
-            f"수량: {quantity}주 × {order_price:,}원\n"
-            f"목표: {target:,}원 (+{config.PULLBACK_TARGET_PCT}%)\n"
-            f"손절: {stop_loss:,}원 (-{config.PULLBACK_STOP_LOSS_PCT}%)"
-        )
+        # 매수 이유 구체화 — 숫자를 해석해서 사람이 납득할 수 있게
+        candidate_count = len(_morning_top_movers)
+        bounce_pct = (current - today_low) / today_low * 100 if today_low > 0 else 0
+
+        # 되돌림 해석
+        ret_pct = retracement * 100
+        if ret_pct >= 55:
+            ret_reason = f'되돌림 {ret_pct:.0f}% — 충분히 눈림, 바닥 근처'
+        elif ret_pct >= 40:
+            ret_reason = f'되돌림 {ret_pct:.0f}% — 적정 조정 구간'
+        else:
+            ret_reason = f'되돌림 {ret_pct:.0f}% — 초기 조정 구간'
+
+        # 반등 해석
+        if bounce_pct >= 2.0:
+            bounce_reason = f'저점 대비 +{bounce_pct:.1f}% 반등 — 강한 바닥 신호'
+        elif bounce_pct >= 1.0:
+            bounce_reason = f'저점 대비 +{bounce_pct:.1f}% 반등 — 바닥 다진 신호'
+        else:
+            bounce_reason = f'저점 대비 +{bounce_pct:.1f}% 반등 — 초기 반등'
+
+        reasons = [
+            f'\U0001f4c9 <b>눌림목 반등 매수</b>\n',
+            f'{name} ({code}) 현재 {change_pct:+.1f}%',
+            f'',
+            f'\U0001f4ca <b>매수 이유</b>',
+            f'• 오전 +{mover["morning_high_pct"]:.1f}% 급등 후 조정 — 매수 기회',
+            f'• {ret_reason}',
+            f'• {bounce_reason}',
+            f'• 전일대비 +{change_pct:.1f}% 유지 — 상승 추세 유효',
+            f'• {candidate_count}개 급등주 중 최적 진입점',
+            f'',
+            f'\U0001f4b0 <b>주문</b>',
+            f'{quantity}주 × {order_price:,}원',
+            f'목표: {target:,}원 (+{config.PULLBACK_TARGET_PCT}%)',
+            f'손절: {stop_loss:,}원 (-{config.PULLBACK_STOP_LOSS_PCT}%)',
+        ]
+        bot.send_message('\n'.join(reasons))
 
         order = {
             "stock_code": code, "name": name,
@@ -743,7 +836,7 @@ def _try_pullback_entry(
                 sell_strategy={"type": "pullback", "target_pct": config.PULLBACK_TARGET_PCT},
                 buy_slippage_pct=slippage, score=0, phase="pullback", is_momentum=False,
             )
-            bot.send_fill_confirmation(fills)
+            bot.send_fill_confirmation(fills, strategy='pullback')
             if not config.DRY_RUN and db:
                 db.save_trade(stock_code=f["stock_code"], stock_name=f["name"],
                     action="buy", quantity=f["quantity"], price=fill_price,
