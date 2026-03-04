@@ -437,7 +437,7 @@ def _try_momentum_entry(
                         kosdaq_change, m_score, config.MARKET_INDEX_OVERRIDE_SCORE)
             bot.send_message(
                 f"🛑 KOSDAQ {kosdaq_change:+.1f}% 하락 + "
-                f"{name} 스코어 {m_score:.1f} < {config.MARKET_INDEX_OVERRIDE_SCORE} — 진입 차단"
+                f"{name} 스코어 {m_score:.1f} ≤ {config.MARKET_INDEX_OVERRIDE_SCORE} — 진입 차단"
             )
             return None
 
