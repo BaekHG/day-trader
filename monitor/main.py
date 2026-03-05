@@ -1249,7 +1249,7 @@ def run_daily_cycle():
                     pass
                 if monitor.should_stop or _past_entry_cutoff():
                     break
-                time.sleep(min(30, cooldown_end - time.time()))
+                time.sleep(max(0, min(30, cooldown_end - time.time())))
 
     if monitor.positions and not monitor.should_stop:
         logger.info("오전 잔여 포지션 %d개 — 모니터링 계속", len(monitor.positions))
@@ -1388,7 +1388,7 @@ def _run_afternoon_phase(
                     pass
                 if monitor.should_stop or _past_afternoon_cutoff():
                     break
-                time.sleep(min(30, cooldown_end - time.time()))
+                time.sleep(max(0, min(30, cooldown_end - time.time())))
 
 def _run_one_cycle(
     cycle: int,
