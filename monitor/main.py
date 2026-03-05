@@ -1135,11 +1135,12 @@ def run_daily_cycle():
                 logger.error("오버나이트 체크 실패 %s: %s", pos.get("name", code), e)
 
 
-    if monitor.positions and past_analysis_time():
-        logger.info("기존 포지션 %d개 감지 — 모니터링 재개", len(monitor.positions))
+    existing_active = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+    if existing_active and past_analysis_time():
+        logger.info("기존 포지션 %d개 감지 — 모니터링 재개 (수동 %d개 제외)", len(existing_active), len(monitor.positions) - len(existing_active))
         bot.send_message(
-            f"기존 포지션 {len(monitor.positions)}개 감지 — 모니터링 재개\n"
-            + "\n".join(f"  {p['name']} {p['remaining_qty']}주" for p in monitor.positions.values())
+            f"기존 포지션 {len(existing_active)}개 감지 — 모니터링 재개\n"
+            + "\n".join(f"  {p['name']} {p['remaining_qty']}주" for p in existing_active.values())
         )
         exit_reason = _run_monitoring_loop(
             monitor, bot, kis, collector, analyzer, trader, sold_codes,
@@ -1251,8 +1252,9 @@ def run_daily_cycle():
                     break
                 time.sleep(max(0, min(30, cooldown_end - time.time())))
 
-    if monitor.positions and not monitor.should_stop:
-        logger.info("오전 잔여 포지션 %d개 — 모니터링 계속", len(monitor.positions))
+    active_positions = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+    if active_positions and not monitor.should_stop:
+        logger.info("오전 잔여 포지션 %d개 — 모니터링 계속 (수동 %d개 제외)", len(active_positions), len(monitor.positions) - len(active_positions))
         loop_exit = _run_monitoring_loop(
             monitor, bot, kis, collector, analyzer, trader, sold_codes,
         )
