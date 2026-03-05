@@ -197,22 +197,18 @@ class PositionMonitor:
             pos_phase = pos.get("phase", "morning")
             if is_momentum and _boosted:
                 max_hold = config.BOOST_TIME_STOP_MINUTES
-                min_profit_for_hold = config.BOOST_TIME_STOP_MIN_PROFIT
             elif is_momentum:
                 max_hold = config.MOMENTUM_TIME_STOP_MINUTES
-                min_profit_for_hold = config.MOMENTUM_TIME_STOP_MIN_PROFIT
             elif pos_phase == "afternoon":
                 max_hold = config.AFTERNOON_MAX_HOLD_MINUTES
-                min_profit_for_hold = 1.0
             else:
                 max_hold = config.MAX_HOLD_MINUTES
-                min_profit_for_hold = 1.0
 
             entry_time_str = pos.get("entry_time", "")
             if entry_time_str:
                 entry_dt = datetime.fromisoformat(entry_time_str)
                 hold_minutes = (now - entry_dt).total_seconds() / 60
-                if hold_minutes >= max_hold and pnl_pct < min_profit_for_hold:
+                if hold_minutes >= max_hold and pnl_pct < 0:
                     tag = "모멘텀 " if is_momentum else ""
                     self._execute_sell(
                         code, pos, remaining, current,
