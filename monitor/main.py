@@ -1146,6 +1146,8 @@ def run_daily_cycle():
         )
         if exit_reason == "positions_cleared" and not _past_entry_cutoff():
             logger.info("포지션 청산 — 추가 사이클 가능, 멀티사이클 진입")
+        elif exit_reason == "positions_cleared" and _should_run_afternoon(monitor):
+            logger.info("활성 포지션 청산 — 오후 전략으로 전환")
         else:
             _send_daily_report(monitor, bot, db)
             return bot
