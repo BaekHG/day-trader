@@ -42,6 +42,30 @@ jobs:
             monitor/day-trader-failsafe.timer \
             harry@ai-shorts-server:/tmp/
 
+      - name: Deploy monitor to Jaemin
+        run: |
+          gcloud compute scp --zone=asia-northeast3-a --recurse \
+            monitor/config.py \
+            monitor/kis_client.py \
+            monitor/naver_data.py \
+            monitor/market_data.py \
+            monitor/ai_analyzer.py \
+            monitor/trader.py \
+            monitor/monitor.py \
+            monitor/telegram_bot.py \
+            monitor/main.py \
+            monitor/db.py \
+            monitor/stock_scorer.py \
+            monitor/backtester.py \
+            monitor/force_close_failsafe.py \
+            monitor/requirements.txt \
+            harry@ai-shorts-server:/home/harry/day-trader-jaemin/
+          gcloud compute scp --zone=asia-northeast3-a \
+            monitor/day-trader-jaemin.service \
+            monitor/day-trader-jaemin-failsafe.service \
+            monitor/day-trader-jaemin-failsafe.timer \
+            harry@ai-shorts-server:/tmp/
+
       - name: Inject secrets into .env
         run: |
           gcloud compute ssh harry@ai-shorts-server --zone=asia-northeast3-a --command="
@@ -49,6 +73,15 @@ jobs:
             touch .env &&
             grep -q TELEGRAM_BOT_TOKEN .env && sed -i 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}/' .env || echo 'TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}' >> .env &&
             grep -q TELEGRAM_CHAT_ID .env && sed -i 's/^TELEGRAM_CHAT_ID=.*/TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}/' .env || echo 'TELEGRAM_CHAT_ID=${{ secrets.TELEGRAM_CHAT_ID }}' >> .env
+          "
+
+      - name: Inject secrets into Jaemin .env
+        run: |
+          gcloud compute ssh harry@ai-shorts-server --zone=asia-northeast3-a --command="
+            cd /home/harry/day-trader-jaemin &&
+            touch .env &&
+            grep -q TELEGRAM_BOT_TOKEN .env && sed -i 's/^TELEGRAM_BOT_TOKEN=.*/TELEGRAM_BOT_TOKEN=${{ secrets.JAEMIN_TELEGRAM_BOT_TOKEN }}/' .env || echo 'TELEGRAM_BOT_TOKEN=${{ secrets.JAEMIN_TELEGRAM_BOT_TOKEN }}' >> .env &&
+            grep -q TELEGRAM_CHAT_ID .env && sed -i 's/^TELEGRAM_CHAT_ID=.*/TELEGRAM_CHAT_ID=${{ secrets.JAEMIN_TELEGRAM_CHAT_ID }}/' .env || echo 'TELEGRAM_CHAT_ID=${{ secrets.JAEMIN_TELEGRAM_CHAT_ID }}' >> .env
           "
 
       - name: Install failsafe timer
@@ -60,6 +93,18 @@ jobs:
             sudo systemctl enable day-trader-failsafe.timer &&
             sudo systemctl start day-trader-failsafe.timer &&
             echo 'Failsafe timer installed'
+          "
+
+      - name: Install Jaemin failsafe timer
+        run: |
+          gcloud compute ssh harry@ai-shorts-server --zone=asia-northeast3-a --command="
+            sudo cp /tmp/day-trader-jaemin.service /etc/systemd/system/ &&
+            sudo cp /tmp/day-trader-jaemin-failsafe.service /etc/systemd/system/ &&
+            sudo cp /tmp/day-trader-jaemin-failsafe.timer /etc/systemd/system/ &&
+            sudo systemctl daemon-reload &&
+            sudo systemctl enable day-trader-jaemin-failsafe.timer &&
+            sudo systemctl start day-trader-jaemin-failsafe.timer &&
+            echo 'Jaemin failsafe timer installed'
           "
 
       - name: Install dependencies & verify
@@ -74,4 +119,18 @@ jobs:
             sudo systemctl is-active day-trader.service &&
             python3 -c 'from telegram_bot import TelegramBot; TelegramBot().send_message(\"Deploy + Restart complete\")' &&
             echo 'Deploy OK'
+          "
+
+      - name: Install Jaemin dependencies & verify
+        run: |
+          gcloud compute ssh harry@ai-shorts-server --zone=asia-northeast3-a --command="
+            cd /home/harry/day-trader-jaemin &&
+            test -d venv || python3 -m venv venv &&
+            source venv/bin/activate &&
+            pip install -q -r requirements.txt &&
+            sudo systemctl restart day-trader-jaemin.service &&
+            sleep 8 &&
+            sudo systemctl is-active day-trader-jaemin.service &&
+            python3 -c 'from telegram_bot import TelegramBot; TelegramBot().send_message(\"[Jaemin] Deploy + Restart complete\")' &&
+            echo 'Jaemin Deploy OK'
           "

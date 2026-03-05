@@ -1,0 +1,10 @@
+[Unit]
+Description=Day Trader Jaemin Force-Close Failsafe
+After=network.target
+
+[Service]
+Type=oneshot
+User=harry
+WorkingDirectory=/home/harry/day-trader-jaemin
+ExecStart=/home/harry/day-trader-jaemin/venv/bin/python3 force_close_failsafe.py
+EnvironmentFile=/home/harry/day-trader-jaemin/.env

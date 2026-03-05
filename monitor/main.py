@@ -1342,7 +1342,8 @@ def _run_afternoon_phase(
             bot.send_message(f"🛑 일일 손실한도 ({daily_pnl:.1f}%) — 오후 중단")
             break
 
-        if not monitor.positions:
+        active = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+        if not active:
             entered = False
 
             # 1) 눌림목 먼저 시도
@@ -1429,7 +1430,8 @@ def _run_one_cycle(
 
     logger.info("enriched %d 종목", len(enriched))
 
-    if not monitor.positions:
+    active = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+    if not active:
         momentum_result = _try_momentum_entry(
             kis, bot, db, collector, trader, monitor, sold_codes, market_data,
             consecutive_losses=consecutive_losses,

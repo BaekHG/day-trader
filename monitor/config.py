@@ -13,8 +13,8 @@ KIS_APP_SECRET = os.getenv(
     "XtRzemBuW6e5g5FlxWM6JGP4+hTVxloCO+9d7o8iUbGelWnO/+WL/kc5stM537aMQ3qmHDLEuMnj2fABtndTQAwAXnOpfnCbWj03X3k=",
 )
 KIS_ACCOUNT_NO = os.getenv("KIS_ACCOUNT_NO", "6864747501")
-KIS_CANO = "68647475"       # KIS API splits account: first 8 digits
-KIS_ACNT_PRDT_CD = "01"     # KIS API splits account: last 2 digits
+KIS_CANO = KIS_ACCOUNT_NO[:8]          # KIS API splits account: first 8 digits
+KIS_ACNT_PRDT_CD = KIS_ACCOUNT_NO[8:]   # KIS API splits account: last 2 digits
 KIS_BASE_URL = "https://openapi.koreainvestment.com:9443"
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")

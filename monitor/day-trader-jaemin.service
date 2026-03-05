@@ -1,0 +1,19 @@
+[Unit]
+Description=Day Trader - Jaemin (Korean Stock Auto Trading)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=harry
+WorkingDirectory=/home/harry/day-trader-jaemin
+ExecStart=/home/harry/day-trader-jaemin/venv/bin/python3 /home/harry/day-trader-jaemin/main.py
+Restart=always
+RestartSec=10
+EnvironmentFile=/home/harry/day-trader-jaemin/.env
+
+StandardOutput=append:/home/harry/day-trader-jaemin/logs/service.log
+StandardError=append:/home/harry/day-trader-jaemin/logs/service.log
+
+[Install]
+WantedBy=multi-user.target
