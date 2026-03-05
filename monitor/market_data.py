@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 KST = pytz.timezone("Asia/Seoul")
 
+
 def _is_early_morning() -> bool:
     """장 초반 모드 활성 여부 (09:00 ~ 09:00+EARLY_MORNING_MINUTES)."""
     now = datetime.now(KST)
@@ -32,7 +33,12 @@ def _min_trading_value(price: int) -> int:
 
 
 class MarketDataCollector:
-    def __init__(self, kis: KISClient, naver_fin: NaverFinanceService, naver_news: NaverNewsService):
+    def __init__(
+        self,
+        kis: KISClient,
+        naver_fin: NaverFinanceService,
+        naver_news: NaverNewsService,
+    ):
         self.kis = kis
         self.naver_fin = naver_fin
         self.naver_news = naver_news
@@ -75,7 +81,13 @@ class MarketDataCollector:
             "is_market_open": is_open,
         }
 
-    def enrich_stocks(self, volume_ranking: list[dict], stock_news: dict, is_market_open: bool, phase: str = "morning") -> list[dict]:
+    def enrich_stocks(
+        self,
+        volume_ranking: list[dict],
+        stock_news: dict,
+        is_market_open: bool,
+        phase: str = "morning",
+    ) -> list[dict]:
         pool_size = config.ENRICHMENT_POOL_SIZE
         top10 = volume_ranking[:pool_size]
 
@@ -93,7 +105,9 @@ class MarketDataCollector:
                     detail.get("breakdown", f"총점 {s.get('score', 0)}"),
                 )
             return scored
-        logger.warning("하드 필터 통과 종목 0개 — 이번 사이클 매매 비추천 (빈 리스트 반환)")
+        logger.warning(
+            "하드 필터 통과 종목 0개 — 이번 사이클 매매 비추천 (빈 리스트 반환)"
+        )
         return []
 
     def enrich_momentum_candidates(self, stock_news: dict) -> list[dict]:
@@ -110,7 +124,11 @@ class MarketDataCollector:
         entry_start = now.replace(hour=entry_start_h, minute=entry_start_m, second=0)
         entry_end = now.replace(hour=entry_end_h, minute=entry_end_m, second=0)
         if not (entry_start <= now <= entry_end):
-            logger.info("모멘텀 진입 시간대 아님 (%s~%s)", config.MOMENTUM_ENTRY_START, config.MOMENTUM_ENTRY_END)
+            logger.info(
+                "모멘텀 진입 시간대 아님 (%s~%s)",
+                config.MOMENTUM_ENTRY_START,
+                config.MOMENTUM_ENTRY_END,
+            )
             self.last_scan_summary = f"진입 시간대 아님 ({config.MOMENTUM_ENTRY_START}~{config.MOMENTUM_ENTRY_END})"
             return []
 
@@ -120,7 +138,9 @@ class MarketDataCollector:
             self.last_scan_summary = "등락률 조건 충족 종목 0개 (소싱 결과 없음)"
             return []
 
-        enriched = self._enrich_batch(raw[:config.ENRICHMENT_POOL_SIZE], stock_news, True)
+        enriched = self._enrich_batch(
+            raw[: config.ENRICHMENT_POOL_SIZE], stock_news, True
+        )
 
         validated = []
         rejected = []
@@ -157,7 +177,9 @@ class MarketDataCollector:
         self.last_scan_summary = "\n".join(summary_parts)
         return scored
 
-    def _enrich_batch(self, items: list[dict], stock_news: dict, is_market_open: bool) -> list[dict]:
+    def _enrich_batch(
+        self, items: list[dict], stock_news: dict, is_market_open: bool
+    ) -> list[dict]:
         def _enrich_one(item: dict) -> dict:
             code = item.get("mksc_shrn_iscd", "")
             result = dict(item)
@@ -182,21 +204,25 @@ class MarketDataCollector:
                 if h > high_20d:
                     high_20d = h
             for c in candles[:5]:
-                recent.append({
-                    "date": c.get("stck_bsop_date", ""),
-                    "open": c.get("stck_oprc", ""),
-                    "high": c.get("stck_hgpr", ""),
-                    "low": c.get("stck_lwpr", ""),
-                    "close": c.get("stck_clpr", ""),
-                    "volume": c.get("acml_vol", ""),
-                })
+                recent.append(
+                    {
+                        "date": c.get("stck_bsop_date", ""),
+                        "open": c.get("stck_oprc", ""),
+                        "high": c.get("stck_hgpr", ""),
+                        "low": c.get("stck_lwpr", ""),
+                        "close": c.get("stck_clpr", ""),
+                        "volume": c.get("acml_vol", ""),
+                    }
+                )
             result["recent_daily_candles"] = recent
             result["daily_candles_full"] = candles
             result["high_20d"] = high_20d
 
             current = int(str(item.get("stck_prpr", 0)).replace(",", "") or 0)
             if high_20d > 0 and current > 0:
-                result["position_from_high"] = round((current - high_20d) / high_20d * 100, 1)
+                result["position_from_high"] = round(
+                    (current - high_20d) / high_20d * 100, 1
+                )
             else:
                 result["position_from_high"] = 0
 
@@ -206,14 +232,16 @@ class MarketDataCollector:
                         minute = self.kis.get_minute_candles(code)
                     m5 = []
                     for mc in minute[:12]:
-                        m5.append({
-                            "time": mc.get("stck_cntg_hour", ""),
-                            "open": mc.get("stck_oprc", ""),
-                            "high": mc.get("stck_hgpr", ""),
-                            "low": mc.get("stck_lwpr", ""),
-                            "close": mc.get("stck_prpr", ""),
-                            "volume": mc.get("cntg_vol", ""),
-                        })
+                        m5.append(
+                            {
+                                "time": mc.get("stck_cntg_hour", ""),
+                                "open": mc.get("stck_oprc", ""),
+                                "high": mc.get("stck_hgpr", ""),
+                                "low": mc.get("stck_lwpr", ""),
+                                "close": mc.get("stck_prpr", ""),
+                                "volume": mc.get("cntg_vol", ""),
+                            }
+                        )
                     result["minute_candles_5m"] = m5
                 except Exception:
                     result["minute_candles_5m"] = []
@@ -226,7 +254,9 @@ class MarketDataCollector:
             return result
 
         with ThreadPoolExecutor(max_workers=5) as executor:
-            futures = {executor.submit(_enrich_one, item): i for i, item in enumerate(items)}
+            futures = {
+                executor.submit(_enrich_one, item): i for i, item in enumerate(items)
+            }
             results: list = [None] * len(items)
             for future in as_completed(futures):
                 idx = futures[future]
@@ -241,7 +271,9 @@ class MarketDataCollector:
     def _get_momentum_candidates(self) -> list[dict]:
         try:
             ranking = self.kis.get_fluctuation_ranking_filtered(
-                rate_min=config.EARLY_MOMENTUM_RATE_MIN if _is_early_morning() else config.MOMENTUM_RATE_MIN,
+                rate_min=config.EARLY_MOMENTUM_RATE_MIN
+                if _is_early_morning()
+                else config.MOMENTUM_RATE_MIN,
                 rate_max=config.MOMENTUM_RATE_MAX,
                 price_min=config.MOMENTUM_MIN_PRICE,
                 vol_min=config.MOMENTUM_MIN_VOLUME,
@@ -250,8 +282,12 @@ class MarketDataCollector:
                 for item in ranking:
                     if "stck_shrn_iscd" in item and "mksc_shrn_iscd" not in item:
                         item["mksc_shrn_iscd"] = item["stck_shrn_iscd"]
-                logger.info("모멘텀 소싱: KIS 등락률 %.1f~%.1f%% (%d종목)",
-                            config.MOMENTUM_RATE_MIN, config.MOMENTUM_RATE_MAX, len(ranking))
+                logger.info(
+                    "모멘텀 소싱: KIS 등락률 %.1f~%.1f%% (%d종목)",
+                    config.MOMENTUM_RATE_MIN,
+                    config.MOMENTUM_RATE_MAX,
+                    len(ranking),
+                )
                 return ranking[:20]
         except Exception as e:
             logger.warning("모멘텀 소싱 실패: %s", e)
@@ -268,31 +304,47 @@ class MarketDataCollector:
             if prev_close > 0 and prev_open > 0:
                 prev_change = (prev_close - prev_open) / prev_open * 100
                 if prev_change > config.MOMENTUM_PREV_DAY_MAX_CHANGE:
-                    logger.info("모멘텀 제외 [전일 연속급등 %.1f%%]: %s", prev_change, name)
+                    logger.info(
+                        "모멘텀 제외 [전일 연속급등 %.1f%%]: %s", prev_change, name
+                    )
                     return False, f"전일 연속급등 {prev_change:.1f}%"
 
         current = int(str(stock.get("stck_prpr", 0)).replace(",", "") or 0)
         today_open = int(str(stock.get("stck_oprc", 0)).replace(",", "") or 0)
         if today_open > 0 and current < today_open:
-            logger.info("모멘텀 제외 [시가 하회 — 갭 실패]: %s (현재 %s < 시가 %s)",
-                        name, f"{current:,}", f"{today_open:,}")
+            logger.info(
+                "모멘텀 제외 [시가 하회 — 갭 실패]: %s (현재 %s < 시가 %s)",
+                name,
+                f"{current:,}",
+                f"{today_open:,}",
+            )
             return False, f"시가 하회 ({current:,} < 시가 {today_open:,})"
 
         today_high = int(str(stock.get("stck_hgpr", 0)).replace(",", "") or 0)
         if today_high > 0 and current > 0:
             high_ratio = current / today_high
             if high_ratio < config.MOMENTUM_MIN_HIGH_RATIO:
-                logger.info("모멘텀 제외 [고점 대비 %.1f%% — 이미 꺾임]: %s",
-                            (1 - high_ratio) * 100, name)
+                logger.info(
+                    "모멘텀 제외 [고점 대비 %.1f%% — 이미 꺾임]: %s",
+                    (1 - high_ratio) * 100,
+                    name,
+                )
                 return False, f"고점 대비 {(1 - high_ratio) * 100:.1f}% 하락"
 
         m_candles = stock.get("minute_candles_5m", [])
         if len(m_candles) >= 2:
             vol_recent = int(str(m_candles[0].get("volume", 0)).replace(",", "") or 0)
             vol_prev = int(str(m_candles[1].get("volume", 0)).replace(",", "") or 0)
-            if vol_prev > 0 and vol_recent < vol_prev * config.MOMENTUM_VOL_SUSTAIN_RATIO:
-                logger.info("모멘텀 제외 [거래량 급감 %s→%s]: %s",
-                            f"{vol_prev:,}", f"{vol_recent:,}", name)
+            if (
+                vol_prev > 0
+                and vol_recent < vol_prev * config.MOMENTUM_VOL_SUSTAIN_RATIO
+            ):
+                logger.info(
+                    "모멘텀 제외 [거래량 급감 %s→%s]: %s",
+                    f"{vol_prev:,}",
+                    f"{vol_recent:,}",
+                    name,
+                )
                 return False, f"거래량 급감 ({vol_prev:,}→{vol_recent:,})"
 
             low_recent = int(str(m_candles[0].get("low", 0)).replace(",", "") or 0)
@@ -308,13 +360,20 @@ class MarketDataCollector:
             trading_value = acml_vol * current
         min_tv = _min_trading_value(current)
         if 0 < trading_value < min_tv:
-            logger.info("모멘텀 제외 [거래대금 %s 미만]: %s (%s)",
-                        f"{min_tv / 1e8:.0f}억", name, f"{trading_value:,}")
+            logger.info(
+                "모멘텀 제외 [거래대금 %s 미만]: %s (%s)",
+                f"{min_tv / 1e8:.0f}억",
+                name,
+                f"{trading_value:,}",
+            )
             return False, f"거래대금 {min_tv / 1e8:.0f}억 미만"
 
-        logger.info("모멘텀 검증 통과: %s (%.1f%%, 고점비 %.1f%%)",
-                    name, change_pct,
-                    (current / today_high * 100) if today_high > 0 else 0)
+        logger.info(
+            "모멘텀 검증 통과: %s (%.1f%%, 고점비 %.1f%%)",
+            name,
+            change_pct,
+            (current / today_high * 100) if today_high > 0 else 0,
+        )
         return True, ""
 
     @staticmethod
@@ -389,11 +448,15 @@ class MarketDataCollector:
             elif change < 5.0:
                 change_score = 0.0
             elif change < config.MOMENTUM_OPTIMAL_CHANGE_MIN:
-                change_score = 0.5 + 0.5 * (change - 5.0) / (config.MOMENTUM_OPTIMAL_CHANGE_MIN - 5.0)
+                change_score = 0.5 + 0.5 * (change - 5.0) / (
+                    config.MOMENTUM_OPTIMAL_CHANGE_MIN - 5.0
+                )
             elif change <= config.MOMENTUM_OPTIMAL_CHANGE_MAX:
                 change_score = 1.0
             elif change <= 22.0:
-                change_score = 1.0 - 0.5 * (change - config.MOMENTUM_OPTIMAL_CHANGE_MAX) / (22.0 - config.MOMENTUM_OPTIMAL_CHANGE_MAX)
+                change_score = 1.0 - 0.5 * (
+                    change - config.MOMENTUM_OPTIMAL_CHANGE_MAX
+                ) / (22.0 - config.MOMENTUM_OPTIMAL_CHANGE_MAX)
             elif change <= 29.5:
                 change_score = 0.5 - 0.2 * (change - 22.0) / 7.5
             else:
@@ -404,16 +467,24 @@ class MarketDataCollector:
             daily = s.get("recent_daily_candles", [])
             prev_vol = 1
             if len(daily) >= 2:
-                prev_vol = max(int(str(daily[1].get("volume", 0)).replace(",", "") or 0), 1)
+                prev_vol = max(
+                    int(str(daily[1].get("volume", 0)).replace(",", "") or 0), 1
+                )
             elif daily:
-                prev_vol = max(int(str(daily[0].get("volume", 0)).replace(",", "") or 0), 1)
+                prev_vol = max(
+                    int(str(daily[0].get("volume", 0)).replace(",", "") or 0), 1
+                )
 
             expected_vol = prev_vol * max(expected_pct, 0.01)
             raw_vol_ratio = acml_vol / max(expected_vol, 1)
             vol_score = min(math.log(max(raw_vol_ratio, 1)) + 1, 5)  # ln, 1.0~5.0
 
             # === 거래량 하드 게이트 ===
-            vol_gate = config.EARLY_MOMENTUM_VOL_GATE if _is_early_morning() else config.MOMENTUM_VOL_GATE
+            vol_gate = (
+                config.EARLY_MOMENTUM_VOL_GATE
+                if _is_early_morning()
+                else config.MOMENTUM_VOL_GATE
+            )
             if vol_score < vol_gate:
                 s["momentum_score"] = 0
                 s["score"] = 0
@@ -442,12 +513,18 @@ class MarketDataCollector:
             theme_label = ""
             try:
                 import main as _main_mod
+
                 bs = getattr(_main_mod, "_boost_state", {})
                 if bs.get("active"):
                     name = s.get("hts_kor_isnm", "")
                     news = s.get("news_headlines", [])
-                    text_blob = name + " " + " ".join(
-                        n.get("title", "") if isinstance(n, dict) else str(n) for n in news[:5]
+                    text_blob = (
+                        name
+                        + " "
+                        + " ".join(
+                            n.get("title", "") if isinstance(n, dict) else str(n)
+                            for n in news[:5]
+                        )
                     )
                     for theme in bs.get("boost_themes", []):
                         if theme and theme in text_blob:
@@ -482,9 +559,11 @@ class MarketDataCollector:
 
         candidates.sort(key=lambda x: x.get("momentum_score", 0), reverse=True)
         for s in candidates[:3]:
-            logger.info("모멘텀 스코어: %s — %s",
-                        s.get("hts_kor_isnm", "?"),
-                        s.get("score_detail", {}).get("breakdown", ""))
+            logger.info(
+                "모멘텀 스코어: %s — %s",
+                s.get("hts_kor_isnm", "?"),
+                s.get("score_detail", {}).get("breakdown", ""),
+            )
         return candidates
 
     def check_momentum_entry(self, code: str) -> tuple[bool, str]:
@@ -505,9 +584,16 @@ class MarketDataCollector:
         if intraday_high > 0 and intraday_cur > 0:
             intraday_ratio = intraday_cur / intraday_high
             if intraday_ratio < config.MOMENTUM_MIN_HIGH_RATIO:
-                logger.info("모멘텀 진입 거부 [장중 고점 대비 %.1f%% < %.0f%%]: %s",
-                            intraday_ratio * 100, config.MOMENTUM_MIN_HIGH_RATIO * 100, code)
-                return False, f"장중 고점 대비 {intraday_ratio*100:.1f}% ({config.MOMENTUM_MIN_HIGH_RATIO*100:.0f}% 미만)"
+                logger.info(
+                    "모멘텀 진입 거부 [장중 고점 대비 %.1f%% < %.0f%%]: %s",
+                    intraday_ratio * 100,
+                    config.MOMENTUM_MIN_HIGH_RATIO * 100,
+                    code,
+                )
+                return (
+                    False,
+                    f"장중 고점 대비 {intraday_ratio * 100:.1f}% ({config.MOMENTUM_MIN_HIGH_RATIO * 100:.0f}% 미만)",
+                )
 
         if len(candles) >= 3:
             prev2 = candles[2]
@@ -524,10 +610,23 @@ class MarketDataCollector:
             prev_vol = int(str(prev.get("cntg_vol", 0)).replace(",", "") or 0)
 
             drop_pct = (prev2_high - curr_high) / prev2_high if prev2_high > 0 else 0
-            if prev2_high > 0 and curr_high < prev_high < prev2_high and drop_pct >= 0.003:
-                logger.info("모멘텀 감속 감지: %s (고점 하락 %s→%s→%s, -%.2f%%) — 진입 거부",
-                            code, f"{prev2_high:,}", f"{prev_high:,}", f"{curr_high:,}", drop_pct * 100)
-                return False, f"감속 감지 (고점 {prev2_high:,}→{prev_high:,}→{curr_high:,}, -{drop_pct*100:.1f}%)"
+            if (
+                prev2_high > 0
+                and curr_high < prev_high < prev2_high
+                and drop_pct >= 0.003
+            ):
+                logger.info(
+                    "모멘텀 감속 감지: %s (고점 하락 %s→%s→%s, -%.2f%%) — 진입 거부",
+                    code,
+                    f"{prev2_high:,}",
+                    f"{prev_high:,}",
+                    f"{curr_high:,}",
+                    drop_pct * 100,
+                )
+                return (
+                    False,
+                    f"감속 감지 (고점 {prev2_high:,}→{prev_high:,}→{curr_high:,}, -{drop_pct * 100:.1f}%)",
+                )
 
             is_pullback = prev_close <= prev_open
             breakout = curr_close > prev_high
@@ -539,19 +638,33 @@ class MarketDataCollector:
 
             current = int(str(candles[0].get("stck_prpr", 0)).replace(",", "") or 0)
             today_high = max(
-                int(str(c.get("stck_hgpr", 0)).replace(",", "") or 0) for c in candles[:6]
+                int(str(c.get("stck_hgpr", 0)).replace(",", "") or 0)
+                for c in candles[:6]
             )
             if today_high > 0 and current > 0:
-                near_high = current >= today_high * (config.MOMENTUM_MIN_HIGH_RATIO + 0.02)
+                near_high = current >= today_high * (
+                    config.MOMENTUM_MIN_HIGH_RATIO + 0.02
+                )
                 vol_strong = curr_vol > prev_vol * 0.8
                 if near_high and vol_strong:
-                    logger.info("모멘텀 고점 근접 진입: %s (고점 %.1f%%↑, 거래량 유지)", code, current / today_high * 100)
-                    return True, f"고점 {current/today_high*100:.1f}%↑ + 거래량 유지"
+                    logger.info(
+                        "모멘텀 고점 근접 진입: %s (고점 %.1f%%↑, 거래량 유지)",
+                        code,
+                        current / today_high * 100,
+                    )
+                    return (
+                        True,
+                        f"고점 {current / today_high * 100:.1f}%↑ + 거래량 유지",
+                    )
 
             return False, "캔들 패턴 미충족 (풀백돌파✗, 고점근접✗)"
 
         # ── Fallback: 5분봉 없을 때 현재가 기반 진입 판단 ──
-        logger.info("모멘텀 5분봉 부족 (%d개) — 현재가 기반 fallback 진입 판단: %s", len(candles), code)
+        logger.info(
+            "모멘텀 5분봉 부족 (%d개) — 현재가 기반 fallback 진입 판단: %s",
+            len(candles),
+            code,
+        )
         try:
             with self._kis_semaphore:
                 price_data = self.kis.get_current_price(code)
@@ -569,30 +682,60 @@ class MarketDataCollector:
         # 조건 1: 고점 대비 config 기준 이상 유지 (fallback이므로 config값 그대로)
         high_ratio = current / today_high
         if high_ratio < config.MOMENTUM_MIN_HIGH_RATIO:
-            logger.info("모멘텀 fallback 거부: %s 고점 대비 %.1f%% (%.0f%% 미만)", code, high_ratio * 100, config.MOMENTUM_MIN_HIGH_RATIO * 100)
-            return False, f"고점 대비 {high_ratio*100:.1f}% ({config.MOMENTUM_MIN_HIGH_RATIO*100:.0f}% 미만)"
+            logger.info(
+                "모멘텀 fallback 거부: %s 고점 대비 %.1f%% (%.0f%% 미만)",
+                code,
+                high_ratio * 100,
+                config.MOMENTUM_MIN_HIGH_RATIO * 100,
+            )
+            return (
+                False,
+                f"고점 대비 {high_ratio * 100:.1f}% ({config.MOMENTUM_MIN_HIGH_RATIO * 100:.0f}% 미만)",
+            )
 
         # 조건 2: 시가 대비 양봉 (시가 이상)
         early = _is_early_morning()
         tolerance = config.EARLY_FALLBACK_OPEN_TOLERANCE if early else 0.0
         if today_open > 0 and current < today_open * (1 - tolerance):
             if early:
-                logger.info("모멘텀 fallback 거부: %s 시가 하회 (%s < %s × %.1f%%)", code, f"{current:,}", f"{today_open:,}", (1 - tolerance) * 100)
+                logger.info(
+                    "모멘텀 fallback 거부: %s 시가 하회 (%s < %s × %.1f%%)",
+                    code,
+                    f"{current:,}",
+                    f"{today_open:,}",
+                    (1 - tolerance) * 100,
+                )
             else:
-                logger.info("모멘텀 fallback 거부: %s 시가 하회 (%s < %s)", code, f"{current:,}", f"{today_open:,}")
+                logger.info(
+                    "모멘텀 fallback 거부: %s 시가 하회 (%s < %s)",
+                    code,
+                    f"{current:,}",
+                    f"{today_open:,}",
+                )
             return False, f"시가 하회 ({current:,} < {today_open:,})"
 
         # 조건 3: 최소 거래량 확인
         if volume < config.MOMENTUM_MIN_VOLUME:
-            logger.info("모멘텀 fallback 거부: %s 거래량 부족 (%s < %s)",
-                        code, f"{volume:,}", f"{config.MOMENTUM_MIN_VOLUME:,}")
+            logger.info(
+                "모멘텀 fallback 거부: %s 거래량 부족 (%s < %s)",
+                code,
+                f"{volume:,}",
+                f"{config.MOMENTUM_MIN_VOLUME:,}",
+            )
             return False, f"거래량 부족 ({volume:,} < {config.MOMENTUM_MIN_VOLUME:,})"
 
-        logger.info("모멘텀 fallback 진입 확인: %s (고점 %.1f%%, 시가↑, 거래량 %s)", code, high_ratio * 100, f"{volume:,}")
-        return True, f"fallback 통과 (고점 {high_ratio*100:.1f}%, 거래량 {volume:,})"
+        logger.info(
+            "모멘텀 fallback 진입 확인: %s (고점 %.1f%%, 시가↑, 거래량 %s)",
+            code,
+            high_ratio * 100,
+            f"{volume:,}",
+        )
+        return True, f"fallback 통과 (고점 {high_ratio * 100:.1f}%, 거래량 {volume:,})"
 
     @staticmethod
-    def _apply_hard_filters(stocks: list[dict], is_market_open: bool, phase: str = "morning") -> list[dict]:
+    def _apply_hard_filters(
+        stocks: list[dict], is_market_open: bool, phase: str = "morning"
+    ) -> list[dict]:
         passed = []
         if phase == "afternoon":
             change_min = config.AFTERNOON_HARD_FILTER_CHANGE_MIN
@@ -601,17 +744,41 @@ class MarketDataCollector:
             change_min = 0.5
             change_max = config.MORNING_HARD_FILTER_CHANGE_MAX
 
+        try:
+            import main as _main_mod
+
+            if getattr(_main_mod, "_boost_state", {}).get("active"):
+                prev_max = change_max
+                change_max = config.BOOST_HARD_FILTER_CHANGE_MAX
+                logger.info(
+                    "불장 모드 하드필터 확대: change_max %.1f%% → %.1f%%",
+                    prev_max,
+                    change_max,
+                )
+        except Exception:
+            pass
+
         for s in stocks:
             name = s.get("hts_kor_isnm", "?")
             change_pct = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
 
             if change_pct >= config.HARD_FILTER_MAX_CHANGE:
-                logger.info("필터 제외 [+%.0f%%↑ 급등]: %s (%.1f%%)", config.HARD_FILTER_MAX_CHANGE, name, change_pct)
+                logger.info(
+                    "필터 제외 [+%.0f%%↑ 급등]: %s (%.1f%%)",
+                    config.HARD_FILTER_MAX_CHANGE,
+                    name,
+                    change_pct,
+                )
                 continue
 
             if is_market_open and not (change_min <= change_pct <= change_max):
-                logger.info("필터 제외 [등락률 %.1f~%.1f%% 미충족]: %s (%.1f%%)",
-                            change_min, change_max, name, change_pct)
+                logger.info(
+                    "필터 제외 [등락률 %.1f~%.1f%% 미충족]: %s (%.1f%%)",
+                    change_min,
+                    change_max,
+                    name,
+                    change_pct,
+                )
                 continue
 
             raw_tv = str(s.get("acml_tr_pbmn", "0")).replace(",", "")
@@ -619,13 +786,21 @@ class MarketDataCollector:
             price = int(str(s.get("stck_prpr", "0")).replace(",", "") or "0")
             min_tv = _min_trading_value(price)
             if trading_value > 0 and trading_value < min_tv:
-                logger.info("필터 제외 [거래대금 %s 미만]: %s (%s)",
-                            f"{min_tv / 1e8:.0f}억", name, f"{trading_value:,}")
+                logger.info(
+                    "필터 제외 [거래대금 %s 미만]: %s (%s)",
+                    f"{min_tv / 1e8:.0f}억",
+                    name,
+                    f"{trading_value:,}",
+                )
                 continue
 
             pos_from_high = s.get("position_from_high", -999)
             if isinstance(pos_from_high, (int, float)) and pos_from_high < -10.0:
-                logger.info("필터 제외 [고점 대비 -10%% 초과 하락]: %s (%.1f%%)", name, pos_from_high)
+                logger.info(
+                    "필터 제외 [고점 대비 -10%% 초과 하락]: %s (%.1f%%)",
+                    name,
+                    pos_from_high,
+                )
                 continue
 
             # 5분봉 거래량 감소 추세 필터 (장중만)
@@ -639,7 +814,12 @@ class MarketDataCollector:
                     if len(vols) >= 2 and vols[0] > 0:
                         # 최근 봉 거래량이 첫 봉의 30% 미만이면 모멘텀 소멸
                         if vols[0] < vols[-1] * 0.3:
-                            logger.info("필터 제외 [5분봉 거래량 급감]: %s (최근 %s → %s)", name, f"{vols[0]:,}", f"{vols[-1]:,}")
+                            logger.info(
+                                "필터 제외 [5분봉 거래량 급감]: %s (최근 %s → %s)",
+                                name,
+                                f"{vols[0]:,}",
+                                f"{vols[-1]:,}",
+                            )
                             continue
 
             passed.append(s)
@@ -674,7 +854,10 @@ class MarketDataCollector:
 
         logger.info(
             "3중 소싱 결과: 거래량 %d + 등락률 %d + 돌파 %d → 합산 %d종목 (중복제거)",
-            len(source_a), len(source_b), len(source_c), len(merged),
+            len(source_a),
+            len(source_b),
+            len(source_c),
+            len(merged),
         )
         return merged
 
@@ -690,7 +873,11 @@ class MarketDataCollector:
                 vol = int(str(item.get("acml_vol", "0")).replace(",", "") or "0")
                 change = float(str(item.get("prdy_ctrt", "0")).replace(",", "") or "0")
                 # 기본 필터: 1000원 이상, 거래량 5만 이상, 급등 상한 미만
-                if price >= config.DUAL_SOURCING_MIN_PRICE and vol >= 50000 and change < config.HARD_FILTER_MAX_CHANGE:
+                if (
+                    price >= config.DUAL_SOURCING_MIN_PRICE
+                    and vol >= 50000
+                    and change < config.HARD_FILTER_MAX_CHANGE
+                ):
                     filtered.append(item)
             logger.info("돌파 후보 소스: KIS 상승순위 (%d종목)", len(filtered))
             return filtered[:20]
@@ -741,7 +928,12 @@ class MarketDataCollector:
                 vol_min=config.DUAL_SOURCING_MIN_VOLUME,
             )
             if ranking:
-                logger.info("등락률 범위 순위 소스: KIS (%d종목, %.1f~%.1f%%)", len(ranking), rate_min, rate_max)
+                logger.info(
+                    "등락률 범위 순위 소스: KIS (%d종목, %.1f~%.1f%%)",
+                    len(ranking),
+                    rate_min,
+                    rate_max,
+                )
                 return ranking[:20]
         except Exception as e:
             logger.warning("KIS 등락률 범위 순위 실패: %s", e)
@@ -790,7 +982,7 @@ class MarketDataCollector:
     def _collect_news(self, volume_ranking: list[dict]) -> dict:
         news = {}
         targets = []
-        for item in volume_ranking[:config.ENRICHMENT_POOL_SIZE]:
+        for item in volume_ranking[: config.ENRICHMENT_POOL_SIZE]:
             name = item.get("hts_kor_isnm", "")
             code = item.get("mksc_shrn_iscd", "")
             if name and code:
