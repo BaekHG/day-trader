@@ -1782,9 +1782,10 @@ def _run_monitoring_loop(
             logger.info("사용자 /stop 명령 — 모니터링 종료")
             return "user_stop"
 
-        if not monitor.positions:
-            logger.info("모든 포지션 청산 — 모니터링 종료")
-            bot.send_message("모든 포지션 청산 완료 — 모니터링 종료")
+        active = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+        if not active:
+            logger.info("활성 포지션 청산 — 모니터링 종료 (수동 %d개 유지)", len(monitor.positions))
+            bot.send_message("모든 활성 포지션 청산 완료 — 모니터링 종료")
             return "positions_cleared"
 
         if is_market_hours():
