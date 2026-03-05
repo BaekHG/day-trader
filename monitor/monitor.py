@@ -36,6 +36,24 @@ class PositionMonitor:
         buy_slippage_pct: float = 0.0, score: int = 0, phase: str = "morning",
         is_momentum: bool = False, today_open: int = 0,
     ):
+        existing = self.positions.get(stock_code)
+        if existing and existing.get("remaining_qty", 0) > 0:
+            # 같은 종목 추가매수 — 수량 합산 + 평균단가 재계산
+            old_qty = existing["remaining_qty"]
+            total_cost = existing["entry_price"] * old_qty + entry_price * quantity
+            new_qty = old_qty + quantity
+            avg_price = total_cost // new_qty if new_qty > 0 else entry_price
+            existing["quantity"] = new_qty
+            existing["remaining_qty"] = new_qty
+            existing["entry_price"] = avg_price
+            existing["stop_loss"] = stop_loss
+            existing["high_since_entry"] = max(existing.get("high_since_entry", avg_price), avg_price)
+            if sell_strategy:
+                existing["sell_strategy"] = sell_strategy
+            self._save_positions()
+            tag = "[모멘텀]" if is_momentum else ""
+            logger.info("%s포지션 추가매수: %s +%d주 (총 %d주, 평단 %s원)", tag, name, quantity, new_qty, f"{avg_price:,}")
+            return
         self.positions[stock_code] = {
             "name": name, "quantity": quantity, "remaining_qty": quantity,
             "entry_price": entry_price, "target1": target1, "target2": target2,
@@ -387,11 +405,26 @@ class PositionMonitor:
                 if not ok:
                     self.bot.send_message(f"⚠️ {name} 매도 기록 DB 저장 실패")
 
-            if pos["remaining_qty"] <= qty:
-                self.remove_position(code)
-            else:
-                pos["remaining_qty"] -= qty
-                self._save_positions()
+            # KIS 실잔고로 확인 후 포지션 업데이트
+            time.sleep(0.5)
+            try:
+                holdings = self.kis.get_balance()
+                kis_qty = {h["stock_code"]: h["quantity"] for h in holdings}
+                actual = kis_qty.get(code, 0)
+                if actual <= 0:
+                    self.remove_position(code)
+                else:
+                    pos["remaining_qty"] = actual
+                    pos["quantity"] = actual
+                    self._save_positions()
+                    logger.info("%s KIS 실잔량: %d주 남음", name, actual)
+            except Exception as e_bal:
+                logger.warning("매도 후 잔고 확인 실패: %s — 계산값 사용", e_bal)
+                if pos["remaining_qty"] <= qty:
+                    self.remove_position(code)
+                else:
+                    pos["remaining_qty"] -= qty
+                    self._save_positions()
         else:
             err = result.get("msg1", "알 수 없음")
             # "수량 초과" 오류 → 이미 매도된 상태일 가능성 → 실잔고 확인
@@ -492,20 +525,23 @@ class PositionMonitor:
             self.trades_today = []
 
     def sync_with_balance(self) -> dict:
+        """KIS 실잔고를 source of truth로 하여 positions.json 동기화."""
         if config.DRY_RUN:
-            return {"added": [], "removed": []}
+            return {"added": [], "removed": [], "updated": []}
         try:
             holdings = self.kis.get_balance()
         except Exception as e:
             logger.error("잔고 조회 실패 — 동기화 스킵: %s", e)
-            return {"added": [], "removed": []}
+            return {"added": [], "removed": [], "updated": []}
 
         kis_codes = {h["stock_code"]: h for h in holdings}
         pos_codes = set(self.positions.keys())
 
         added: list[dict] = []
         removed: list[str] = []
+        updated: list[dict] = []
 
+        # 1) KIS에 있는데 positions.json에 없는 종목 → 수동 매수로 추가
         for code, h in kis_codes.items():
             if code not in pos_codes:
                 entry = h["avg_price"]
@@ -517,10 +553,21 @@ class PositionMonitor:
                     quantity=h["quantity"], entry_price=entry,
                     target1=0, target2=0, stop_loss=stop_loss,
                 )
-                self.positions[code]["manual"] = True  # 수동 매수 — 모니터링 제외
+                self.positions[code]["manual"] = True
                 added.append(h)
                 logger.info("동기화 추가 [수동]: %s %d주 @ %s원 (모니터링 제외)", h["name"], h["quantity"], f"{entry:,}")
+            else:
+                # 2) 양쪽에 있지만 수량 불일치 → KIS 수량으로 동기화
+                pos = self.positions[code]
+                kis_qty = h["quantity"]
+                if pos["remaining_qty"] != kis_qty:
+                    old_qty = pos["remaining_qty"]
+                    pos["remaining_qty"] = kis_qty
+                    pos["quantity"] = kis_qty
+                    updated.append({"name": h["name"], "old": old_qty, "new": kis_qty})
+                    logger.info("동기화 수량 업데이트: %s %d주→%d주 (KIS 기준)", h["name"], old_qty, kis_qty)
 
+        # 3) positions.json에 있는데 KIS에 없는 종목 → 제거
         for code in list(pos_codes):
             if code not in kis_codes:
                 name = self.positions[code].get("name", code)
@@ -528,10 +575,10 @@ class PositionMonitor:
                 self.remove_position(code)
                 logger.info("동기화 제거: %s (실잔고에 없음)", name)
 
-        if added or removed:
+        if added or removed or updated:
             self._save_positions()
 
-        return {"added": added, "removed": removed}
+        return {"added": added, "removed": removed, "updated": updated}
 
     def _load_positions(self):
         try:

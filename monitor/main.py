@@ -1045,12 +1045,14 @@ def run_daily_cycle():
     if not config.DRY_RUN:
         logger.info("KIS 잔고 ↔ positions.json 동기화")
         sync_result = monitor.sync_with_balance()
-        if sync_result["added"] or sync_result["removed"]:
+        if sync_result["added"] or sync_result["removed"] or sync_result.get("updated"):
             lines = ["🔄 <b>포지션 동기화 완료</b>"]
             for h in sync_result["added"]:
                 lines.append(f"  ➕ {h['name']} {h['quantity']}주 @ {h['avg_price']:,}원")
             for name in sync_result["removed"]:
                 lines.append(f"  ➖ {name} (청산됨)")
+            for u in sync_result.get("updated", []):
+                lines.append(f"  🔄 {u['name']} {u['old']}주→{u['new']}주 (KIS 기준)")
             bot.send_message("\n".join(lines))
 
     bot.start_polling(kis, monitor)
@@ -1109,8 +1111,7 @@ def run_daily_cycle():
                                 "reason": f"오버나이트 갭다운 {gap_pct:+.1f}%",
                                 "phase": "overnight",
                             })
-                            del monitor.positions[code]
-                            monitor._save_positions()
+                            monitor.remove_position(code)
                             if db:
                                 db.save_trade(code, pos["name"], "sell", remaining, current,
                                               reason=f"오버나이트 갭다운 {gap_pct:+.1f}%")
@@ -1763,6 +1764,9 @@ def _run_monitoring_loop(
     collector=None, analyzer=None, trader=None, sold_codes=None,
     phase: str = "morning",
 ) -> str:
+    # 모니터링 진입 전 KIS 잔고 동기화
+    if not config.DRY_RUN:
+        monitor.sync_with_balance()
     logger.info("모니터링 루프 시작 — 포지션 %d개", len(monitor.positions))
     bot.send_message(f"🔍 모니터링 시작 — {len(monitor.positions)}개 포지션")
     last_reinvest = 0
