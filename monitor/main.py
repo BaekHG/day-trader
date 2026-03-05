@@ -336,7 +336,7 @@ def _try_momentum_entry(
     if not config.MOMENTUM_ENABLED:
         return None
 
-    if monitor.positions:
+    if len(monitor.positions) >= config.MAX_PICKS:
         return None
 
     kosdaq = market_data.get("kosdaq_index", {})
@@ -494,7 +494,8 @@ def _try_momentum_entry(
     try:
         available_cash = kis.get_available_cash()
     except Exception:
-        available_cash = config.TOTAL_CAPITAL
+        logger.warning("예수금 조회 실패 — 모멘텀 진입 스킵")
+        return None
 
     if boosted:
         pos_pct = config.BOOST_MAX_POSITION_PCT
@@ -686,7 +687,7 @@ def _try_pullback_entry(
         logger.info("눌림목 — 오전 급등주 기록 없음")
         return None
 
-    if monitor.positions:
+    if len(monitor.positions) >= config.MAX_PICKS:
         return None
 
     logger.info("눌림목 스캔 — 오전 급등주 %d종목 확인", len(_morning_top_movers))
@@ -744,7 +745,8 @@ def _try_pullback_entry(
         try:
             available_cash = kis.get_available_cash()
         except Exception:
-            available_cash = config.TOTAL_CAPITAL
+            logger.warning("예수금 조회 실패 — 눌림목 진입 스킵")
+            continue
 
         position_cash = int(available_cash * config.AFTERNOON_MAX_POSITION_PCT / 100)
         order_price = round_to_tick(int(current * 1.005))
@@ -995,21 +997,29 @@ def _try_reinvest(
 
 
 def _get_daily_pnl_pct(monitor: PositionMonitor) -> float:
-    """일일 손익률 (실현 + 미실현)."""
+    """일일 손익률 (실현 + 미실현). 실제 예수금+보유자산 기준."""
     realized = sum(t.get("pnl_amt", 0) for t in monitor.trades_today)
     unrealized = 0
+    position_value = 0
     for code, pos in monitor.positions.items():
         try:
             pd = monitor.kis.get_current_price(code)
             cur = pd["price"]
             if cur > 0:
                 unrealized += (cur - pos["entry_price"]) * pos["remaining_qty"]
+                position_value += cur * pos["remaining_qty"]
         except Exception:
             pass
     total_pnl = realized + unrealized
-    if config.TOTAL_CAPITAL <= 0:
+    # 실제 총자산 = 예수금 + 보유종목 평가액
+    try:
+        cash = monitor.kis.get_available_cash()
+    except Exception:
+        cash = 0
+    total_assets = cash + position_value
+    if total_assets <= 0:
         return 0.0
-    return total_pnl / config.TOTAL_CAPITAL * 100
+    return total_pnl / total_assets * 100
 
 
 def run_daily_cycle():
@@ -1471,8 +1481,9 @@ def _run_one_cycle(
         available_cash = kis.get_available_cash()
         logger.info("주문 가능 현금: %s원", f"{available_cash:,}")
     except Exception as e:
-        logger.warning("현금 조회 실패, 설정값 사용: %s", e)
-        available_cash = config.TOTAL_CAPITAL
+        logger.warning("현금 조회 실패: %s — 매매 건너뛰", e)
+        bot.send_message("⚠️ 예수금 조회 실패 — 오늘 매매 스킵")
+        return
 
     logger.info("Phase 4 — 텔레그램 분석 결과 전송")
     analysis["_kospi"] = market_data["kospi_index"]

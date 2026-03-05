@@ -175,7 +175,7 @@ class TelegramBot:
         for o in orders:
             lines.append(f"{o['name']} | {o['quantity']}주 × {o['price']:,}원 = {o['amount']:,}원")
             total += o["amount"]
-        lines.append(f"\n총 주문: {total:,}원 / {config.TOTAL_CAPITAL:,}원")
+        lines.append(f"\n총 주문: {total:,}원")
         self.send_message("\n".join(lines))
 
     def send_fill_confirmation(self, fills: list[dict], strategy: str = ""):

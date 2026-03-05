@@ -94,7 +94,7 @@ REINVEST_CHECK_INTERVAL = int(os.getenv("REINVEST_CHECK_INTERVAL", "300"))
 
 # --- 포지션 사이징 ---
 MAX_PICKS = int(os.getenv("MAX_PICKS", "1"))            # 최대 동시 보유 종목 수
-MAX_POSITION_PCT = int(os.getenv("MAX_POSITION_PCT", "80"))  # 종목당 자본 배분 한도 (%)
+MAX_POSITION_PCT = int(os.getenv("MAX_POSITION_PCT", "95"))  # 종목당 자본 배분 한도 (%) — 올인
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
