@@ -13,6 +13,30 @@ logger = logging.getLogger(__name__)
 KST = pytz.timezone("Asia/Seoul")
 
 
+def align_to_tick(price: int, round_up: bool = False) -> int:
+    """KRX 호가단위에 맞게 가격 보정.
+    round_up=False: 내림 (매도용 — 체결 확률 높임)
+    round_up=True: 올림 (매수용 — 체결 확률 높임)
+    """
+    if price < 2000:
+        tick = 1
+    elif price < 5000:
+        tick = 5
+    elif price < 20000:
+        tick = 10
+    elif price < 50000:
+        tick = 50
+    elif price < 200000:
+        tick = 100
+    elif price < 500000:
+        tick = 500
+    else:
+        tick = 1000
+    if round_up:
+        return ((price + tick - 1) // tick) * tick
+    return (price // tick) * tick
+
+
 class KISClient:
     def __init__(self):
         self.base_url = config.KIS_BASE_URL
@@ -111,29 +135,6 @@ class KISClient:
             "high": int(o.get("stck_hgpr", 0)),
             "low": int(o.get("stck_lwpr", 0)),
         }
-
-def align_to_tick(price: int, round_up: bool = False) -> int:
-    """KRX 호가단위에 맞게 가격 보정.
-    round_up=False: 내림 (매도용 — 체결 확률 높임)
-    round_up=True: 올림 (매수용 — 체결 확률 높임)
-    """
-    if price < 2000:
-        tick = 1
-    elif price < 5000:
-        tick = 5
-    elif price < 20000:
-        tick = 10
-    elif price < 50000:
-        tick = 50
-    elif price < 200000:
-        tick = 100
-    elif price < 500000:
-        tick = 500
-    else:
-        tick = 1000
-    if round_up:
-        return ((price + tick - 1) // tick) * tick
-    return (price // tick) * tick
 
 
     def place_sell_order(self, stock_code: str, quantity: int, price: int = 0) -> dict:
