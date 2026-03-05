@@ -74,10 +74,13 @@ def force_close_all(dry_run: bool = False):
 
     logger.info("잔여 포지션 %d개 발견!", len(positions))
     for code, pos in positions.items():
-        logger.info("  %s (%s) %d주 @ %s원",
-                     pos.get("name", "?"), code,
-                     pos.get("remaining_qty", 0),
-                     f"{pos.get('entry_price', 0):,}")
+        logger.info(
+            "  %s (%s) %d주 @ %s원",
+            pos.get("name", "?"),
+            code,
+            pos.get("remaining_qty", 0),
+            f"{pos.get('entry_price', 0):,}",
+        )
 
     if dry_run:
         logger.info("[DRY RUN] 매도 주문 건너뜀")
@@ -96,8 +99,14 @@ def force_close_all(dry_run: bool = False):
     success_count = 0
     fail_count = 0
 
+    manual_kept = []
     for code, pos in positions.items():
         name = pos.get("name", code)
+
+        if pos.get("manual"):
+            manual_kept.append(f"{name} {pos.get('remaining_qty', 0)}주")
+            logger.info("%s — manual 포지션, 스킵", name)
+            continue
 
         if real_holdings is not None:
             if code not in real_holdings:
@@ -124,11 +133,11 @@ def force_close_all(dry_run: bool = False):
                     err = result.get("msg1", "알 수 없음")
                     logger.error("%s 매도 실패 (시도 %d/3): %s", name, attempt + 1, err)
                     if attempt < 2:
-                        time.sleep(2 ** attempt)
+                        time.sleep(2**attempt)
             except Exception as e:
                 logger.error("%s 매도 주문 오류 (시도 %d/3): %s", name, attempt + 1, e)
                 if attempt < 2:
-                    time.sleep(2 ** attempt)
+                    time.sleep(2**attempt)
         else:
             fail_count += 1
             logger.error("%s 매도 3회 실패!", name)
@@ -141,13 +150,26 @@ def force_close_all(dry_run: bool = False):
     if not success_count and not fail_count:
         msg_lines.append("ℹ️ 실잔고 확인 결과 청산 대상 없음")
 
+    if manual_kept:
+        msg_lines.append(f"📌 수동 포지션 유지: {', '.join(manual_kept)}")
+
     try:
         bot.send_message("\n".join(msg_lines))
     except Exception as e:
         logger.error("텔레그램 전송 실패: %s", e)
 
-    if fail_count == 0:
+    if fail_count == 0 and not manual_kept:
         clear_positions_file()
+    elif fail_count == 0 and manual_kept:
+        remaining = {c: p for c, p in positions.items() if p.get("manual")}
+        try:
+            tmp = config.POSITIONS_FILE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(remaining, f, ensure_ascii=False)
+            os.rename(tmp, config.POSITIONS_FILE)
+            logger.info("positions.json 업데이트 — manual %d개 유지", len(remaining))
+        except Exception as e:
+            logger.error("positions.json 업데이트 실패: %s", e)
     else:
         logger.warning("일부 실패 — positions.json 유지 (수동 확인 필요)")
 
