@@ -59,6 +59,8 @@ AFTERNOON_MIN_STOP_LOSS_PCT = float(os.getenv("AFTERNOON_MIN_STOP_LOSS_PCT", "1.
 AFTERNOON_CYCLE_COOLDOWN = int(os.getenv("AFTERNOON_CYCLE_COOLDOWN", "600"))  # 900→600초(10분)
 AFTERNOON_HARD_FILTER_CHANGE_MIN = float(os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MIN", "0.5"))  # 오후 재투자 등락률 하한
 AFTERNOON_HARD_FILTER_CHANGE_MAX = float(os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MAX", "8.0"))  # 오후 재투자 등락률 상한 (오전 6→8%)
+MORNING_HARD_FILTER_CHANGE_MAX = float(os.getenv("MORNING_HARD_FILTER_CHANGE_MAX", "8.0"))  # 오전 등락률 상한 (6→8%, 오후와 통일)
+HARD_FILTER_MAX_CHANGE = float(os.getenv("HARD_FILTER_MAX_CHANGE", "15.0"))  # 급등 필터 상한 (10→15%, 강세장 대응)
 # 눌림목 전략 전용 파라미터
 PULLBACK_MIN_MORNING_CHANGE = float(os.getenv("PULLBACK_MIN_MORNING_CHANGE", "5.0"))  # 8→5%: 더 많은 종목 대상
 PULLBACK_RETRACEMENT_MIN = float(os.getenv("PULLBACK_RETRACEMENT_MIN", "0.20"))  # 30→20%: 살짝 눈림도 매수

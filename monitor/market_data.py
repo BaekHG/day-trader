@@ -599,14 +599,14 @@ class MarketDataCollector:
             change_max = config.AFTERNOON_HARD_FILTER_CHANGE_MAX
         else:
             change_min = 0.5
-            change_max = 6.0
+            change_max = config.MORNING_HARD_FILTER_CHANGE_MAX
 
         for s in stocks:
             name = s.get("hts_kor_isnm", "?")
             change_pct = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
 
-            if change_pct >= 10.0:
-                logger.info("필터 제외 [+10%%↑ 급등]: %s (%.1f%%)", name, change_pct)
+            if change_pct >= config.HARD_FILTER_MAX_CHANGE:
+                logger.info("필터 제외 [+%.0f%%↑ 급등]: %s (%.1f%%)", config.HARD_FILTER_MAX_CHANGE, name, change_pct)
                 continue
 
             if is_market_open and not (change_min <= change_pct <= change_max):
@@ -651,7 +651,7 @@ class MarketDataCollector:
             rate_max = config.AFTERNOON_HARD_FILTER_CHANGE_MAX
         else:
             rate_min = 0.5
-            rate_max = 6.0
+            rate_max = config.MORNING_HARD_FILTER_CHANGE_MAX
 
         source_a = self._get_volume_ranking_with_cap_filter()
         source_b = self._get_change_rate_ranking(rate_min, rate_max)
@@ -689,8 +689,8 @@ class MarketDataCollector:
                 price = int(str(item.get("stck_prpr", "0")).replace(",", "") or "0")
                 vol = int(str(item.get("acml_vol", "0")).replace(",", "") or "0")
                 change = float(str(item.get("prdy_ctrt", "0")).replace(",", "") or "0")
-                # 기본 필터: 1000원 이상, 거래량 5만 이상, +10% 미만 (상한가 제외)
-                if price >= config.DUAL_SOURCING_MIN_PRICE and vol >= 50000 and change < 10.0:
+                # 기본 필터: 1000원 이상, 거래량 5만 이상, 급등 상한 미만
+                if price >= config.DUAL_SOURCING_MIN_PRICE and vol >= 50000 and change < config.HARD_FILTER_MAX_CHANGE:
                     filtered.append(item)
             logger.info("돌파 후보 소스: KIS 상승순위 (%d종목)", len(filtered))
             return filtered[:20]
