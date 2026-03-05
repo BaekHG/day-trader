@@ -290,25 +290,42 @@ class TelegramBot:
             self._update_lock.release()
 
     def _send_status(self, monitor, kis_client):
-        if not monitor.positions:
+        # KIS 실잔고를 source of truth로 표시
+        try:
+            holdings = kis_client.get_balance()
+        except Exception as e:
+            self.send_message(f"잔고 조회 실패: {e}")
+            return
+        if not holdings:
             self.send_message("보유 종목 없음")
             return
-        lines = ["<b>포지션 현황</b>\n"]
-        for code, pos in monitor.positions.items():
-            try:
-                pd = kis_client.get_current_price(code)
-                cur = pd["price"]
-            except Exception:
-                cur = 0
-            entry = pos["entry_price"]
-            pnl = (cur - entry) / entry * 100 if entry else 0
-            sign = "+" if pnl >= 0 else ""
-            lines.append(
-                f"<b>{pos['name']}</b> ({code})\n"
-                f"  현재 {cur:,}원 ({sign}{pnl:.1f}%)\n"
-                f"  잔량 {pos['remaining_qty']}주 | T1{'✅' if pos['target1_hit'] else '❌'}\n"
-                f"  목표1 {pos['target1']:,} | 목표2 {pos['target2']:,} | 손절 {pos['stop_loss']:,}\n"
+        lines = ["<b>포지션 현황</b> (KIS 실잔고)\n"]
+        for h in holdings:
+            code = h["stock_code"]
+            sign = "+" if h["pnl_pct"] >= 0 else ""
+            line = (
+                f"<b>{h['name']}</b> ({code})\n"
+                f"  현재 {h['current_price']:,}원 ({sign}{h['pnl_pct']:.1f}%)\n"
+                f"  보유 {h['quantity']}주 | 평단 {h['avg_price']:,}원\n"
             )
+            # 봇 추적 정보가 있으면 병기
+            pos = monitor.positions.get(code)
+            if pos and not pos.get("manual"):
+                t1_icon = "✅" if pos["target1_hit"] else "❌"
+                line += (
+                    f"  손절 {pos['stop_loss']:,} | "
+                    f"T1{t1_icon}\n"
+                )
+            elif pos and pos.get("manual"):
+                line += "  [수동매수 — 모니터링 제외]\n"
+            else:
+                line += "  [봇 미추적]\n"
+            lines.append(line)
+        try:
+            cash = kis_client.get_available_cash()
+            lines.append(f"\n예수금: {cash:,}원")
+        except Exception:
+            pass
         self.send_message("\n".join(lines))
 
     def _send_balance(self, kis_client):
