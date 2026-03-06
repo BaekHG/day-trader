@@ -384,6 +384,9 @@ MIN_TRADING_VALUE_TIERS = [
     (0, 1_000_000_000),  # 2만원 이하: 10억
 ]
 
+COMMISSION_PCT = float(os.getenv("COMMISSION_PCT", "0.015"))
+TAX_PCT = float(os.getenv("TAX_PCT", "0.18"))
+
 # --- Dry-run 모의투자 모드 ---
 # --dry-run 플래그로 활성화: 전체 파이프라인 실행하되 실제 주문 없이 시뮬레이션
 DRY_RUN = False

@@ -31,10 +31,20 @@ class PositionMonitor:
         self._load_trades_today()
 
     def add_position(
-        self, stock_code: str, name: str, quantity: int, entry_price: int,
-        target1: int, target2: int, stop_loss: int, sell_strategy: dict | None = None,
-        buy_slippage_pct: float = 0.0, score: int = 0, phase: str = "morning",
-        is_momentum: bool = False, today_open: int = 0,
+        self,
+        stock_code: str,
+        name: str,
+        quantity: int,
+        entry_price: int,
+        target1: int,
+        target2: int,
+        stop_loss: int,
+        sell_strategy: dict | None = None,
+        buy_slippage_pct: float = 0.0,
+        score: int = 0,
+        phase: str = "morning",
+        is_momentum: bool = False,
+        today_open: int = 0,
     ):
         existing = self.positions.get(stock_code)
         if existing and existing.get("remaining_qty", 0) > 0:
@@ -47,18 +57,33 @@ class PositionMonitor:
             existing["remaining_qty"] = new_qty
             existing["entry_price"] = avg_price
             existing["stop_loss"] = stop_loss
-            existing["high_since_entry"] = max(existing.get("high_since_entry", avg_price), avg_price)
+            existing["high_since_entry"] = max(
+                existing.get("high_since_entry", avg_price), avg_price
+            )
             if sell_strategy:
                 existing["sell_strategy"] = sell_strategy
             self._save_positions()
             tag = "[모멘텀]" if is_momentum else ""
-            logger.info("%s포지션 추가매수: %s +%d주 (총 %d주, 평단 %s원)", tag, name, quantity, new_qty, f"{avg_price:,}")
+            logger.info(
+                "%s포지션 추가매수: %s +%d주 (총 %d주, 평단 %s원)",
+                tag,
+                name,
+                quantity,
+                new_qty,
+                f"{avg_price:,}",
+            )
             return
         self.positions[stock_code] = {
-            "name": name, "quantity": quantity, "remaining_qty": quantity,
-            "entry_price": entry_price, "target1": target1, "target2": target2,
-            "stop_loss": stop_loss, "high_since_entry": entry_price,
-            "target1_hit": False, "sell_strategy": sell_strategy or {},
+            "name": name,
+            "quantity": quantity,
+            "remaining_qty": quantity,
+            "entry_price": entry_price,
+            "target1": target1,
+            "target2": target2,
+            "stop_loss": stop_loss,
+            "high_since_entry": entry_price,
+            "target1_hit": False,
+            "sell_strategy": sell_strategy or {},
             "entry_time": datetime.now(KST).isoformat(),
             "buy_slippage_pct": round(buy_slippage_pct, 3),
             "score": score,
@@ -68,7 +93,9 @@ class PositionMonitor:
         }
         self._save_positions()
         tag = "[모멘텀]" if is_momentum else ""
-        logger.info("%s포지션 추가: %s %d주 @ %s원", tag, name, quantity, f"{entry_price:,}")
+        logger.info(
+            "%s포지션 추가: %s %d주 @ %s원", tag, name, quantity, f"{entry_price:,}"
+        )
 
     def remove_position(self, stock_code: str):
         if stock_code in self.positions:
@@ -81,7 +108,9 @@ class PositionMonitor:
 
     def _check_positions_locked(self):
         now = datetime.now(KST)
-        force_hh, force_mm = map(int, config.FORCE_CLOSE_TIME.split(":"))  # 15:10 — 손실 종목 청산
+        force_hh, force_mm = map(
+            int, config.FORCE_CLOSE_TIME.split(":")
+        )  # 15:10 — 손실 종목 청산
 
         for code, pos in list(self.positions.items()):
             # 수동 매수 포지션은 모니터링 완전 스킵 (유저가 직접 관리)
@@ -103,22 +132,39 @@ class PositionMonitor:
 
             entry = pos["entry_price"]
             remaining = pos["remaining_qty"]
-            pnl_pct = (current - entry) / entry * 100 if entry else 0
+            cost_pct = config.COMMISSION_PCT * 2 + config.TAX_PCT
+            pnl_pct = ((current - entry) / entry * 100 - cost_pct) if entry else 0
 
             # --- 장 마감 2단계 청산 ---
             final_hh, final_mm = map(int, config.FINAL_CLOSE_TIME.split(":"))  # 15:20
-            is_final = now.hour > final_hh or (now.hour == final_hh and now.minute >= final_mm)
-            is_force = now.hour > force_hh or (now.hour == force_hh and now.minute >= force_mm)
+            is_final = now.hour > final_hh or (
+                now.hour == final_hh and now.minute >= final_mm
+            )
+            is_force = now.hour > force_hh or (
+                now.hour == force_hh and now.minute >= force_mm
+            )
 
             if is_final:
                 # 15:20 — 오버나이트 조건 충족 시 홀딩, 아니면 전량 청산
-                if config.OVERNIGHT_ENABLED and pnl_pct >= config.OVERNIGHT_MIN_PROFIT_PCT:
-                    high_ratio = current / pos["high_since_entry"] if pos.get("high_since_entry", 0) > 0 else 0
+                if (
+                    config.OVERNIGHT_ENABLED
+                    and pnl_pct >= config.OVERNIGHT_MIN_PROFIT_PCT
+                ):
+                    high_ratio = (
+                        current / pos["high_since_entry"]
+                        if pos.get("high_since_entry", 0) > 0
+                        else 0
+                    )
                     if high_ratio >= config.OVERNIGHT_MIN_HIGH_RATIO:
                         pos["overnight"] = True
                         pos["overnight_close_price"] = current
                         self._save_positions()
-                        logger.info("%s 오버나이트 홀딩 — 수익 %.1f%%, 고점비 %.1f%%", pos["name"], pnl_pct, high_ratio * 100)
+                        logger.info(
+                            "%s 오버나이트 홀딩 — 수익 %.1f%%, 고점비 %.1f%%",
+                            pos["name"],
+                            pnl_pct,
+                            high_ratio * 100,
+                        )
                         self.bot.send_message(
                             f"🌙 <b>{pos['name']} 오버나이트 홀딩</b>\n\n"
                             f"수익: {pnl_pct:+.1f}% ({current:,}원)\n"
@@ -126,11 +172,25 @@ class PositionMonitor:
                             f"내일 {config.OVERNIGHT_MORNING_CHECK} 갭 체크 예정"
                         )
                         continue
-                self._execute_sell(code, pos, remaining, current, f"{config.FINAL_CLOSE_TIME} 전량 강제 청산", pnl_pct)
+                self._execute_sell(
+                    code,
+                    pos,
+                    remaining,
+                    current,
+                    f"{config.FINAL_CLOSE_TIME} 전량 강제 청산",
+                    pnl_pct,
+                )
                 continue
             elif is_force and pnl_pct <= 0:
                 # 15:10 — 손실 종목만 청산 (수익 종목은 트레일링 유지)
-                self._execute_sell(code, pos, remaining, current, f"{config.FORCE_CLOSE_TIME} 손실 청산 (수익종목 트레일링 유지)", pnl_pct)
+                self._execute_sell(
+                    code,
+                    pos,
+                    remaining,
+                    current,
+                    f"{config.FORCE_CLOSE_TIME} 손실 청산 (수익종목 트레일링 유지)",
+                    pnl_pct,
+                )
                 continue
 
             is_momentum = pos.get("is_momentum", False)
@@ -139,18 +199,23 @@ class PositionMonitor:
                 today_open = pos.get("today_open", 0)
                 if today_open > 0 and current < today_open:
                     self._execute_sell(
-                        code, pos, remaining, current,
-                        "모멘텀 시가 하회 — 갭 실패 즉시 청산", pnl_pct,
+                        code,
+                        pos,
+                        remaining,
+                        current,
+                        "모멘텀 시가 하회 — 갭 실패 즉시 청산",
+                        pnl_pct,
                     )
                     continue
-
 
             # 눌림목 포지션: 손절만 빠르게, 매도는 트레일링으로 (고정 목표 제거)
             is_pullback = pos.get("phase") == "pullback"
             if is_pullback:
                 pullback_stop = int(entry * (1 - config.PULLBACK_STOP_LOSS_PCT / 100))
                 if current <= pullback_stop:
-                    self._execute_sell(code, pos, remaining, current, "눌림목 손절", pnl_pct)
+                    self._execute_sell(
+                        code, pos, remaining, current, "눌림목 손절", pnl_pct
+                    )
                     continue
 
                 pb_entry_time = pos.get("entry_time", "")
@@ -158,8 +223,14 @@ class PositionMonitor:
                     pb_dt = datetime.fromisoformat(pb_entry_time)
                     pb_hold = (now - pb_dt).total_seconds() / 60
                     if pb_hold >= config.AFTERNOON_MAX_HOLD_MINUTES and pnl_pct < 1.0:
-                        self._execute_sell(code, pos, remaining, current,
-                            f"눌림목 {config.AFTERNOON_MAX_HOLD_MINUTES}분 횡보", pnl_pct)
+                        self._execute_sell(
+                            code,
+                            pos,
+                            remaining,
+                            current,
+                            f"눌림목 {config.AFTERNOON_MAX_HOLD_MINUTES}분 횡보",
+                            pnl_pct,
+                        )
                         continue
                 # 트레일링 스탑은 아래 공통 로직에서 처리 (fall through)
 
@@ -167,6 +238,7 @@ class PositionMonitor:
             _boosted = False
             try:
                 import main as _main_mod
+
                 _boosted = getattr(_main_mod, "_boost_state", {}).get("active", False)
             except Exception:
                 pass
@@ -211,17 +283,27 @@ class PositionMonitor:
                 if hold_minutes >= max_hold and pnl_pct < 0:
                     tag = "모멘텀 " if is_momentum else ""
                     self._execute_sell(
-                        code, pos, remaining, current,
-                        f"{tag}{max_hold}분 횡보 — 전량 매도", pnl_pct,
+                        code,
+                        pos,
+                        remaining,
+                        current,
+                        f"{tag}{max_hold}분 횡보 — 전량 매도",
+                        pnl_pct,
                     )
                     continue
 
             logger.info(
                 "%s | %s원 (%.1f%%) | 고점 %s | 잔량 %d주",
-                pos["name"], f"{current:,}", pnl_pct, f"{pos['high_since_entry']:,}", remaining,
+                pos["name"],
+                f"{current:,}",
+                pnl_pct,
+                f"{pos['high_since_entry']:,}",
+                remaining,
             )
 
-    def _step_down_sell(self, code: str, name: str, qty: int, current_price: int) -> dict:
+    def _step_down_sell(
+        self, code: str, name: str, qty: int, current_price: int
+    ) -> dict:
         """단계적 매도: 지정가(+0.3%) → 지정가(현재가) → 시장가.
 
         높은 가격에 먼저 팔아보고, 안 되면 점점 내려오는 전략.
@@ -230,8 +312,8 @@ class PositionMonitor:
 
         steps = [
             ("지정가+{:.1f}%".format(config.SELL_LIMIT_OFFSET_PCT), offset_price),
-            ("지정가(현재가)", 0),   # 0 = refresh price at step time
-            ("시장가", -1),          # -1 = market order
+            ("지정가(현재가)", 0),  # 0 = refresh price at step time
+            ("시장가", -1),  # -1 = market order
         ]
 
         for i, (label, target_price) in enumerate(steps):
@@ -248,11 +330,15 @@ class PositionMonitor:
                     logger.warning("가격 조회 실패 — 시장가 폴백")
                     return self.kis.place_sell_order(code, qty)
 
-            logger.info("매도 %d단계 — %s %s원 (%s)", i + 1, name, f"{target_price:,}", label)
+            logger.info(
+                "매도 %d단계 — %s %s원 (%s)", i + 1, name, f"{target_price:,}", label
+            )
             result = self.kis.place_sell_order(code, qty, price=target_price)
 
             if result.get("rt_cd") != "0":
-                logger.warning("매도 주문 제출 실패: %s — 다음 단계", result.get("msg1", ""))
+                logger.warning(
+                    "매도 주문 제출 실패: %s — 다음 단계", result.get("msg1", "")
+                )
                 continue
 
             # --- 체결 대기 ---
@@ -261,7 +347,11 @@ class PositionMonitor:
             # --- 미체결 확인 ---
             try:
                 pending = self.kis.get_pending_orders(sll_buy_dvsn="01")
-                still_pending = [p for p in pending if p["stock_code"] == code and p["remaining_qty"] > 0]
+                still_pending = [
+                    p
+                    for p in pending
+                    if p["stock_code"] == code and p["remaining_qty"] > 0
+                ]
             except Exception as e:
                 logger.warning("미체결 조회 실패: %s — 체결된 것으로 간주", e)
                 return result
@@ -279,7 +369,9 @@ class PositionMonitor:
             # --- 취소 후 다음 단계 ---
             for p in still_pending:
                 try:
-                    self.kis.cancel_order(p["ord_gno_brno"], p["odno"], p["remaining_qty"])
+                    self.kis.cancel_order(
+                        p["ord_gno_brno"], p["odno"], p["remaining_qty"]
+                    )
                 except Exception as e:
                     logger.warning("매도 취소 실패: %s — 시장가 폴백", e)
                     return self.kis.place_sell_order(code, qty)
@@ -289,7 +381,9 @@ class PositionMonitor:
         # safety net
         return self.kis.place_sell_order(code, qty)
 
-    def _execute_sell(self, code: str, pos: dict, qty: int, price: int, reason: str, pnl_pct: float):
+    def _execute_sell(
+        self, code: str, pos: dict, qty: int, price: int, reason: str, pnl_pct: float
+    ):
         name = pos["name"]
         entry = pos["entry_price"]
         pnl_amt = (price - entry) * qty
@@ -306,7 +400,9 @@ class PositionMonitor:
 
         high_water_mark_pct = 0.0
         if entry > 0:
-            high_water_mark_pct = (pos.get("high_since_entry", entry) - entry) / entry * 100
+            high_water_mark_pct = (
+                (pos.get("high_since_entry", entry) - entry) / entry * 100
+            )
 
         if "트레일링" in reason:
             exit_type = "trailing"
@@ -326,7 +422,9 @@ class PositionMonitor:
         result = {}
         if config.DRY_RUN:
             success = True
-            logger.info("[모의] 매도 시뮬레이션: %s %d주 × %s원", name, qty, f"{price:,}")
+            logger.info(
+                "[모의] 매도 시뮬레이션: %s %d주 × %s원", name, qty, f"{price:,}"
+            )
         elif not urgent and config.SELL_STEP_DOWN:
             # --- 단계적 매도: 지정가 → 시장가 ---
             try:
@@ -349,37 +447,88 @@ class PositionMonitor:
                     if success:
                         break
                 except Exception as e:
-                    logger.error("매도 주문 실패 %s (시도 %d/3): %s", name, sell_attempt + 1, e)
+                    logger.error(
+                        "매도 주문 실패 %s (시도 %d/3): %s", name, sell_attempt + 1, e
+                    )
                     if sell_attempt < 2:
-                        time.sleep(2 ** sell_attempt)
+                        time.sleep(2**sell_attempt)
                         continue
                     self.bot.send_message(f"⚠️ {name} 매도 3회 실패: {e}")
                     return
 
         if success:
             pos.pop("_last_sell_error", None)
+
+            actual_price = price
+            if not config.DRY_RUN:
+                try:
+                    time.sleep(1)
+                    fills = self.kis.get_order_fills()
+                    for f in fills:
+                        if (
+                            f["stock_code"] == code
+                            and f["quantity"] >= qty
+                            and f["price"] > 0
+                        ):
+                            actual_price = f["price"]
+                            break
+                except Exception as e_fill:
+                    logger.warning(
+                        "실체결가 조회 실패 %s: %s — 트리거 가격 사용", name, e_fill
+                    )
+
+            if actual_price != price:
+                logger.info(
+                    "%s 실체결가 보정: %s → %s (슬리피지 %s원)",
+                    name,
+                    f"{price:,}",
+                    f"{actual_price:,}",
+                    f"{actual_price - price:,}",
+                )
+                price = actual_price
+
+            pnl_amt = (price - entry) * qty
+            pnl_pct = (price - entry) / entry * 100 if entry else 0
+            fee = int(
+                entry * qty * config.COMMISSION_PCT / 100
+                + price * qty * config.COMMISSION_PCT / 100
+            )
+            tax = int(price * qty * config.TAX_PCT / 100)
+            pnl_amt -= fee + tax
+            if entry > 0:
+                pnl_pct = pnl_amt / (entry * qty) * 100
+
             emoji = "🟢" if pnl_amt >= 0 else "🔴"
             sign = "+" if pnl_pct >= 0 else ""
             msg = (
                 f"{emoji} <b>{name} 매도 완료</b>\n\n"
                 f"사유: {reason}\n"
                 f"수량: {qty}주 × {price:,}원\n"
-                f"수익: {sign}{pnl_amt:,}원 ({sign}{pnl_pct:.1f}%)"
+                f"수익: {sign}{pnl_amt:,}원 ({sign}{pnl_pct:.1f}%)\n"
+                f"비용: 수수료 {fee:,}원 + 세금 {tax:,}원"
             )
             if pos["remaining_qty"] - qty > 0:
                 msg += f"\n잔여: {pos['remaining_qty'] - qty}주 홀딩"
             self.bot.send_message(msg)
 
-            self.trades_today.append({
-                "code": code, "name": name, "qty": qty,
-                "entry": entry, "exit": price,
-                "pnl_amt": pnl_amt, "pnl_pct": round(pnl_pct, 1), "reason": reason,
-                "exit_type": exit_type, "hold_minutes": round(hold_minutes, 1),
-                "high_water_mark_pct": round(high_water_mark_pct, 2),
-                "buy_slippage_pct": pos.get("buy_slippage_pct", 0.0),
-                "score": pos.get("score", 0),
-                "phase": pos.get("phase", "morning"),
-            })
+            self.trades_today.append(
+                {
+                    "code": code,
+                    "name": name,
+                    "qty": qty,
+                    "entry": entry,
+                    "exit": price,
+                    "pnl_amt": pnl_amt,
+                    "pnl_pct": round(pnl_pct, 1),
+                    "reason": reason,
+                    "exit_type": exit_type,
+                    "hold_minutes": round(hold_minutes, 1),
+                    "high_water_mark_pct": round(high_water_mark_pct, 2),
+                    "buy_slippage_pct": pos.get("buy_slippage_pct", 0.0),
+                    "score": pos.get("score", 0),
+                    "phase": pos.get("phase", "morning"),
+                }
+            )
             self._save_trades_today()
 
             if self.db and not config.DRY_RUN:
@@ -439,9 +588,13 @@ class PositionMonitor:
                     if actual_qty < qty:
                         pos["remaining_qty"] = actual_qty
                         self._save_positions()
-                        self.bot.send_message(f"⚠️ {name} 잔량 불일치 — {qty}주→{actual_qty}주, {actual_qty}주 즉시 매도")
+                        self.bot.send_message(
+                            f"⚠️ {name} 잔량 불일치 — {qty}주→{actual_qty}주, {actual_qty}주 즉시 매도"
+                        )
                         if actual_qty > 0:
-                            self._execute_sell(code, pos, actual_qty, price, reason, pnl_pct)
+                            self._execute_sell(
+                                code, pos, actual_qty, price, reason, pnl_pct
+                            )
                         return
                 except Exception as e2:
                     logger.error("잔고 확인 실패: %s", e2)
@@ -465,8 +618,12 @@ class PositionMonitor:
             lines.append("■ 매매 내역")
             for t in self.trades_today:
                 sign = "+" if t["pnl_amt"] >= 0 else ""
-                emoji = "✅" if t["pnl_amt"] > 0 else ("❌" if t["pnl_amt"] < 0 else "➖")
-                lines.append(f"{t['name']}  {sign}{t['pnl_amt']:,}원 ({sign}{t['pnl_pct']}%) {emoji}")
+                emoji = (
+                    "✅" if t["pnl_amt"] > 0 else ("❌" if t["pnl_amt"] < 0 else "➖")
+                )
+                lines.append(
+                    f"{t['name']}  {sign}{t['pnl_amt']:,}원 ({sign}{t['pnl_pct']}%) {emoji}"
+                )
                 total_pnl += t["pnl_amt"]
 
         lines.append("")
@@ -545,13 +702,22 @@ class PositionMonitor:
                     continue
                 stop_loss = int(entry * (1 - config.MIN_STOP_LOSS_PCT / 100))
                 self.add_position(
-                    stock_code=code, name=h["name"],
-                    quantity=h["quantity"], entry_price=entry,
-                    target1=0, target2=0, stop_loss=stop_loss,
+                    stock_code=code,
+                    name=h["name"],
+                    quantity=h["quantity"],
+                    entry_price=entry,
+                    target1=0,
+                    target2=0,
+                    stop_loss=stop_loss,
                 )
                 self.positions[code]["manual"] = True
                 added.append(h)
-                logger.info("동기화 추가 [수동]: %s %d주 @ %s원 (모니터링 제외)", h["name"], h["quantity"], f"{entry:,}")
+                logger.info(
+                    "동기화 추가 [수동]: %s %d주 @ %s원 (모니터링 제외)",
+                    h["name"],
+                    h["quantity"],
+                    f"{entry:,}",
+                )
             else:
                 # 2) 양쪽에 있지만 수량 불일치 → KIS 수량으로 동기화
                 pos = self.positions[code]
@@ -561,7 +727,12 @@ class PositionMonitor:
                     pos["remaining_qty"] = kis_qty
                     pos["quantity"] = kis_qty
                     updated.append({"name": h["name"], "old": old_qty, "new": kis_qty})
-                    logger.info("동기화 수량 업데이트: %s %d주→%d주 (KIS 기준)", h["name"], old_qty, kis_qty)
+                    logger.info(
+                        "동기화 수량 업데이트: %s %d주→%d주 (KIS 기준)",
+                        h["name"],
+                        old_qty,
+                        kis_qty,
+                    )
 
         # 3) positions.json에 있는데 KIS에 없는 종목 → 제거
         for code in list(pos_codes):

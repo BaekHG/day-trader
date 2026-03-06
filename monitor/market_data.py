@@ -297,6 +297,24 @@ class MarketDataCollector:
         name = stock.get("hts_kor_isnm", "?")
         change_pct = float(str(stock.get("prdy_ctrt", "0")).replace(",", "") or "0")
 
+        import main as _main_mod  # noqa: F811 — lazy import (circular)
+
+        bs = getattr(_main_mod, "_boost_state", {})
+        boosted = bs.get("active", False)
+        change_max = (
+            config.BOOST_HARD_FILTER_CHANGE_MAX
+            if boosted
+            else config.HARD_FILTER_MAX_CHANGE
+        )
+        if change_pct >= change_max:
+            logger.info(
+                "모멘텀 제외 [급등 하드필터 %.1f%% ≥ %.1f%%]: %s",
+                change_pct,
+                change_max,
+                name,
+            )
+            return False, f"급등 하드필터 ({change_pct:.1f}% ≥ {change_max:.1f}%)"
+
         daily = stock.get("recent_daily_candles", [])
         if len(daily) >= 2:
             prev_close = int(str(daily[1].get("close", 0)).replace(",", "") or 0)
