@@ -45,6 +45,7 @@ class PositionMonitor:
         phase: str = "morning",
         is_momentum: bool = False,
         today_open: int = 0,
+        entry_quality: str = "standard",
     ):
         existing = self.positions.get(stock_code)
         if existing and existing.get("remaining_qty", 0) > 0:
@@ -62,6 +63,8 @@ class PositionMonitor:
             )
             if sell_strategy:
                 existing["sell_strategy"] = sell_strategy
+            if entry_quality and not existing.get("entry_quality"):
+                existing["entry_quality"] = entry_quality
             self._save_positions()
             tag = "[모멘텀]" if is_momentum else ""
             logger.info(
@@ -90,6 +93,10 @@ class PositionMonitor:
             "phase": phase,
             "is_momentum": is_momentum,
             "today_open": today_open,
+            "entry_quality": entry_quality,
+            "tiered_sells_done": [False] * len(config.TIERED_SELL_LEVELS),
+            "vwap_below_count": 0,
+            "peak_price": entry_price,
         }
         self._save_positions()
         tag = "[모멘텀]" if is_momentum else ""
@@ -121,21 +128,21 @@ class PositionMonitor:
             except Exception as e:
                 logger.error("%s 가격 조회 실패: %s", pos["name"], e)
                 continue
-
             current = price_data["price"]
             if current <= 0:
                 continue
-
             if current > pos["high_since_entry"]:
                 pos["high_since_entry"] = current
                 self._save_positions()
 
+            # peak_price 업데이트 (티어드 분할매도 잔여분 트레일링용)
+            if current > pos.get("peak_price", 0):
+                pos["peak_price"] = current
             entry = pos["entry_price"]
             remaining = pos["remaining_qty"]
             cost_pct = config.COMMISSION_PCT * 2 + config.TAX_PCT
             pnl_pct = ((current - entry) / entry * 100 - cost_pct) if entry else 0
-
-            # --- 장 마감 2단계 청산 ---
+            # === Step 1: 장 마감 2단계 청산 (기존 100% 유지) ===
             final_hh, final_mm = map(int, config.FINAL_CLOSE_TIME.split(":"))  # 15:20
             is_final = now.hour > final_hh or (
                 now.hour == final_hh and now.minute >= final_mm
@@ -143,7 +150,6 @@ class PositionMonitor:
             is_force = now.hour > force_hh or (
                 now.hour == force_hh and now.minute >= force_mm
             )
-
             if is_final:
                 # 15:20 — 오버나이트 조건 충족 시 홀딩, 아니면 전량 청산
                 if (
@@ -193,8 +199,38 @@ class PositionMonitor:
                 )
                 continue
 
-            is_momentum = pos.get("is_momentum", False)
+            # === Step 2: 타이트 손절 체크 (entry_quality 기반) ===
+            eq = pos.get("entry_quality", "standard")
+            stop_pct = config.TIGHT_STOP_LOSS_PCT
+            for signal_name, pct in config.TIGHT_STOP_BY_SIGNAL:
+                if signal_name == eq:
+                    stop_pct = pct
+                    break
+            tight_stop = int(entry * (1 - stop_pct / 100))
+            if current <= tight_stop:
+                self._execute_sell(
+                    code, pos, remaining, current,
+                    f"타이트 손절 ({eq}: -{stop_pct}%)", pnl_pct,
+                )
+                continue
 
+            # === Step 3: 시간정지 체크 ===
+            entry_time_str = pos.get("entry_time", "")
+            if entry_time_str:
+                entry_dt = datetime.fromisoformat(entry_time_str)
+                hold_minutes = (now - entry_dt).total_seconds() / 60
+                # 횡보 정지: N분 동안 거의 움직이지 않음
+                if hold_minutes >= config.TIME_STOP_FLAT_MINUTES:
+                    if abs(pnl_pct) <= config.TIME_STOP_FLAT_THRESHOLD_PCT:
+                        self._execute_sell(
+                            code, pos, remaining, current,
+                            f"{config.TIME_STOP_FLAT_MINUTES}분 횡보 정지", pnl_pct,
+                        )
+                        continue
+
+
+            # === Step 4: 모멘텀 시가 하회 (기존 유지) ===
+            is_momentum = pos.get("is_momentum", False)
             if is_momentum:
                 today_open = pos.get("today_open", 0)
                 if today_open > 0 and current < today_open:
@@ -208,93 +244,122 @@ class PositionMonitor:
                     )
                     continue
 
-            # 눌림목 포지션: 손절만 빠르게, 매도는 트레일링으로 (고정 목표 제거)
-            is_pullback = pos.get("phase") == "pullback"
-            if is_pullback:
-                pullback_stop = int(entry * (1 - config.PULLBACK_STOP_LOSS_PCT / 100))
-                if current <= pullback_stop:
-                    self._execute_sell(
-                        code, pos, remaining, current, "눌림목 손절", pnl_pct
-                    )
-                    continue
+            # === Step 5: 티어드 분할매도 ===
+            if config.TIERED_SELL_ENABLED:
+                tiered_done = pos.get("tiered_sells_done", [False, False])
+                for tier_idx, (target_pct, sell_pct) in enumerate(config.TIERED_SELL_LEVELS):
+                    if tier_idx >= len(tiered_done):
+                        break
+                    if tiered_done[tier_idx]:
+                        continue
+                    if pnl_pct >= target_pct:
+                        sell_qty = max(1, int(remaining * sell_pct / 100))
+                        if sell_qty >= remaining:
+                            sell_qty = remaining
 
-                pb_entry_time = pos.get("entry_time", "")
-                if pb_entry_time:
-                    pb_dt = datetime.fromisoformat(pb_entry_time)
-                    pb_hold = (now - pb_dt).total_seconds() / 60
-                    if pb_hold >= config.AFTERNOON_MAX_HOLD_MINUTES and pnl_pct < 1.0:
                         self._execute_sell(
-                            code,
-                            pos,
-                            remaining,
-                            current,
-                            f"눌림목 {config.AFTERNOON_MAX_HOLD_MINUTES}분 횡보",
+                            code, pos, sell_qty, current,
+                            f"티어드 분할매도 T{tier_idx+1} (+{target_pct}% → {sell_pct}%)",
                             pnl_pct,
                         )
+
+                        tiered_done[tier_idx] = True
+                        pos["tiered_sells_done"] = tiered_done
+                        self._save_positions()
+                        break  # 한 사이클에 한 티어만
+
+            # === Step 6: VWAP 이탈 정지 (3사이클에 1번 체크) ===
+            vwap_counter = pos.get("_vwap_check_counter", 0) + 1
+            pos["_vwap_check_counter"] = vwap_counter
+            if vwap_counter % 3 == 0 and config.VWAP_EXIT_BELOW:
+                try:
+                    from market_data import calculate_vwap
+                    raw_candles = self.kis.get_minute_candles(code)
+                    candles_5m = [
+                        {"high": c.get("stck_hgpr", ""), "low": c.get("stck_lwpr", ""),
+                         "close": c.get("stck_prpr", ""), "volume": c.get("cntg_vol", "")}
+                        for c in raw_candles[:12]
+                    ]
+                    vwap_result = calculate_vwap(candles_5m)
+                    if not vwap_result["above_vwap"]:
+                        pos["vwap_below_count"] = pos.get("vwap_below_count", 0) + 1
+                    else:
+                        pos["vwap_below_count"] = 0
+
+                    if pos["vwap_below_count"] >= config.VWAP_BREAK_CONFIRM_CANDLES:
+                        self._execute_sell(
+                            code, pos, remaining, current,
+                            f"VWAP 이탈 {pos['vwap_below_count']}캔들 연속", pnl_pct,
+                        )
                         continue
-                # 트레일링 스탑은 아래 공통 로직에서 처리 (fall through)
+                except Exception as e:
+                    logger.warning("VWAP 이탈 체크 실패 %s: %s", pos["name"], e)
 
-            # 불장 모드 확인 (순환 import 회피)
-            _boosted = False
-            try:
-                import main as _main_mod
+            # === Step 7: 수급 반전 정지 (20사이클에 1번 체크) ===
+            flow_counter = pos.get("_flow_check_counter", 0) + 1
+            pos["_flow_check_counter"] = flow_counter
+            if flow_counter % 20 == 0 and config.FLOW_REVERSAL_EXIT:
+                try:
+                    from market_data import analyze_institutional_flow
+                    foreign = self.kis.get_foreign_institution(code)
+                    flow = analyze_institutional_flow(foreign)
+                    if not flow["foreign_buying"] and not flow["institution_buying"]:
+                        if eq in ("premium", "standard"):
+                            self._execute_sell(
+                                code, pos, remaining, current,
+                                "수급 반전 (기관+외국인 순매도 전환)", pnl_pct,
+                            )
+                            continue
+                except Exception as e:
+                    logger.warning("수급 반전 체크 실패 %s: %s", pos["name"], e)
 
-                _boosted = getattr(_main_mod, "_boost_state", {}).get("active", False)
-            except Exception:
-                pass
-
-            if is_momentum and _boosted:
-                trailing_levels = config.BOOST_MOMENTUM_TRAILING_STOP_LEVELS
-            elif is_momentum:
-                trailing_levels = config.MOMENTUM_TRAILING_STOP_LEVELS
-            else:
-                trailing_levels = config.TRAILING_STOP_LEVELS
-
-            effective_stop = pos["stop_loss"]
-            high_pnl = (pos["high_since_entry"] - entry) / entry * 100 if entry else 0
-            for level_pnl, stop_pnl in trailing_levels:
-                if high_pnl >= level_pnl:
-                    trailing_stop = int(entry * (1 + stop_pnl / 100))
-                    effective_stop = max(effective_stop, trailing_stop)
-                    break
-            if current <= effective_stop:
-                if effective_stop > pos["stop_loss"]:
-                    tag = "모멘텀 " if is_momentum else ""
-                    reason = f"{tag}트레일링 스탑 (고점 +{high_pnl:.1f}% → 손절선 +{((effective_stop - entry) / entry * 100):.1f}%)"
-                else:
-                    reason = "모멘텀 손절" if is_momentum else "손절"
-                self._execute_sell(code, pos, remaining, current, reason, pnl_pct)
-                continue
-
-            pos_phase = pos.get("phase", "morning")
-            if is_momentum and _boosted:
-                max_hold = config.BOOST_TIME_STOP_MINUTES
-            elif is_momentum:
-                max_hold = config.MOMENTUM_TIME_STOP_MINUTES
-            elif pos_phase == "afternoon":
-                max_hold = config.AFTERNOON_MAX_HOLD_MINUTES
-            else:
-                max_hold = config.MAX_HOLD_MINUTES
-
-            entry_time_str = pos.get("entry_time", "")
-            if entry_time_str:
-                entry_dt = datetime.fromisoformat(entry_time_str)
-                hold_minutes = (now - entry_dt).total_seconds() / 60
-                if hold_minutes >= max_hold and pnl_pct < 0:
-                    tag = "모멘텀 " if is_momentum else ""
+            # === Step 8: 잔여분 트레일링 (티어드 모두 완료 후) ===
+            all_tiers_done = all(pos.get("tiered_sells_done", [False]))
+            if config.TIERED_SELL_ENABLED and all_tiers_done and remaining > 0:
+                peak = pos.get("peak_price", pos["high_since_entry"])
+                trail_stop = int(peak * (1 - config.TIERED_REMAINDER_TRAILING_PCT / 100))
+                if current <= trail_stop:
                     self._execute_sell(
-                        code,
-                        pos,
-                        remaining,
-                        current,
-                        f"{tag}{max_hold}분 횡보 — 전량 매도",
+                        code, pos, remaining, current,
+                        f"잔여분 트레일링 (고점 {peak:,} → -{config.TIERED_REMAINDER_TRAILING_PCT}%)",
                         pnl_pct,
                     )
                     continue
+            elif not config.TIERED_SELL_ENABLED:
+                # 티어드 비활성 시 기존 트레일링 유지
+                _boosted = False
+                try:
+                    import main as _main_mod
+                    _boosted = getattr(_main_mod, "_boost_state", {}).get("active", False)
+                except Exception:
+                    pass
 
+                if is_momentum and _boosted:
+                    trailing_levels = config.BOOST_MOMENTUM_TRAILING_STOP_LEVELS
+                elif is_momentum:
+                    trailing_levels = config.MOMENTUM_TRAILING_STOP_LEVELS
+                else:
+                    trailing_levels = config.TRAILING_STOP_LEVELS
+                high_pnl = (pos["high_since_entry"] - entry) / entry * 100 if entry else 0
+                for level_pnl, stop_pnl in trailing_levels:
+                    if high_pnl >= level_pnl:
+                        trailing_stop = int(entry * (1 + stop_pnl / 100))
+                        effective_stop = max(effective_stop, trailing_stop)
+                        break
+                if current <= effective_stop:
+                    if effective_stop > pos["stop_loss"]:
+                        tag = "모멘텀 " if is_momentum else ""
+                        reason = f"{tag}트레일링 스탑 (고점 +{high_pnl:.1f}% → 손절선 +{((effective_stop - entry) / entry * 100):.1f}%)"
+                    else:
+                        reason = "모멘텀 손절" if is_momentum else "손절"
+                    self._execute_sell(code, pos, remaining, current, reason, pnl_pct)
+                    continue
+
+            # === Step 9: 로그 출력 ===
             logger.info(
-                "%s | %s원 (%.1f%%) | 고점 %s | 잔량 %d주",
+                "%s [%s] | %s원 (%.1f%%) | 고점 %s | 잔량 %d주",
                 pos["name"],
+                eq,
                 f"{current:,}",
                 pnl_pct,
                 f"{pos['high_since_entry']:,}",
@@ -404,11 +469,19 @@ class PositionMonitor:
                 (pos.get("high_since_entry", entry) - entry) / entry * 100
             )
 
-        if "트레일링" in reason:
+        if "타이트" in reason:
+            exit_type = "tight_stop"
+        elif "티어드" in reason:
+            exit_type = "tiered_sell"
+        elif "VWAP" in reason:
+            exit_type = "vwap_exit"
+        elif "수급 반전" in reason:
+            exit_type = "flow_reversal"
+        elif "트레일링" in reason:
             exit_type = "trailing"
         elif "손절" in reason:
             exit_type = "stop_loss"
-        elif "횡보" in reason or "분" in reason and "매도" in reason:
+        elif "횡보" in reason or "정지" in reason:
             exit_type = "time_exit"
         elif "강제" in reason:
             exit_type = "force_close"

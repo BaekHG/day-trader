@@ -1028,3 +1028,320 @@ class MarketDataCollector:
         except Exception as e:
             logger.warning("API 호출 실패: %s", e)
             return default
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 비대칭 R:R 분석 모듈 — VWAP / 호가 / 수급 / 거래량 / 진입 품질 판정
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+def calculate_vwap(candles_5m: list[dict]) -> dict:
+    """5분봉으로 장중 VWAP + 현재 deviation 계산.
+
+    Returns:
+        {"vwap": float, "deviation_pct": float, "above_vwap": bool}
+    """
+    cum_tp_vol = 0.0
+    cum_vol = 0
+
+    # candles_5m은 최신순 → 역순으로 순회해야 시간순
+    for c in reversed(candles_5m):
+        high = int(str(c.get("high", 0)).replace(",", "") or 0)
+        low = int(str(c.get("low", 0)).replace(",", "") or 0)
+        close = int(str(c.get("close", 0)).replace(",", "") or 0)
+        volume = int(str(c.get("volume", 0)).replace(",", "") or 0)
+        if high <= 0 or low <= 0 or close <= 0 or volume <= 0:
+            continue
+        typical_price = (high + low + close) / 3
+        cum_tp_vol += typical_price * volume
+        cum_vol += volume
+
+    if cum_vol <= 0:
+        return {"vwap": 0.0, "deviation_pct": 0.0, "above_vwap": False}
+
+    vwap = cum_tp_vol / cum_vol
+
+    # 현재가 = 가장 최신 캔들의 close
+    latest_close = 0
+    if candles_5m:
+        latest_close = int(str(candles_5m[0].get("close", 0)).replace(",", "") or 0)
+
+    deviation_pct = 0.0
+    above_vwap = False
+    if latest_close > 0 and vwap > 0:
+        deviation_pct = (latest_close - vwap) / vwap * 100
+        above_vwap = latest_close >= vwap
+
+    return {
+        "vwap": round(vwap, 1),
+        "deviation_pct": round(deviation_pct, 2),
+        "above_vwap": above_vwap,
+    }
+
+
+def calculate_orderbook_imbalance(orderbook: dict) -> dict:
+    """호가 10단계 매수/매도 불균형 계산.
+
+    Top 5 levels만 사용. ratio = bid_vol / ask_vol.
+
+    Returns:
+        {"ratio": float, "bid_wall": bool, "ask_wall": bool,
+         "signal": "buy"|"avoid"|"neutral"}
+    """
+    if not orderbook:
+        return {"ratio": 1.0, "bid_wall": False, "ask_wall": False, "signal": "neutral"}
+
+    bid_volumes = orderbook.get("bid_volumes", [])
+    ask_volumes = orderbook.get("ask_volumes", [])
+
+    # Top 5 levels
+    top_bid = sum(bid_volumes[:5]) if bid_volumes else 0
+    top_ask = sum(ask_volumes[:5]) if ask_volumes else 0
+
+    ratio = top_bid / max(top_ask, 1)
+
+    # Wall 감지: 평균 대비 ORDERBOOK_WALL_THRESHOLD 배 이상
+    avg_bid = top_bid / 5 if top_bid > 0 else 1
+    avg_ask = top_ask / 5 if top_ask > 0 else 1
+    bid_wall = any(v >= avg_bid * config.ORDERBOOK_WALL_THRESHOLD for v in bid_volumes[:5])
+    ask_wall = any(v >= avg_ask * config.ORDERBOOK_WALL_THRESHOLD for v in ask_volumes[:5])
+
+    # Signal 판정
+    if ratio >= config.ORDERBOOK_MIN_BID_ASK_RATIO:
+        signal = "buy"
+    elif ratio < 0.7 or ask_wall:
+        signal = "avoid"
+    else:
+        signal = "neutral"
+
+    return {
+        "ratio": round(ratio, 2),
+        "bid_wall": bid_wall,
+        "ask_wall": ask_wall,
+        "signal": signal,
+    }
+
+
+def analyze_institutional_flow(foreign_data: list[dict]) -> dict:
+    """기관/외국인 수급 분석 (당일 + 3일 추세).
+
+    foreign_data = kis.get_foreign_institution(code) 결과.
+    Fields: frgn_ntby_qty (외국인순매수), orgn_ntby_qty (기관순매수).
+
+    Returns:
+        {"foreign_buying": bool, "institution_buying": bool, "both_buying": bool,
+         "consecutive_days": int, "flow_score": float}
+    """
+    if not foreign_data:
+        return {
+            "foreign_buying": False,
+            "institution_buying": False,
+            "both_buying": False,
+            "consecutive_days": 0,
+            "flow_score": 0.0,
+        }
+
+    # 최신(당일) 데이터
+    today = foreign_data[0] if foreign_data else {}
+    frgn_qty = int(str(today.get("frgn_ntby_qty", 0)).replace(",", "") or 0)
+    orgn_qty = int(str(today.get("orgn_ntby_qty", 0)).replace(",", "") or 0)
+
+    foreign_buying = frgn_qty > 0
+    institution_buying = orgn_qty > 0
+    both_buying = foreign_buying and institution_buying
+
+    # 연속 순매수일 계산 (최대 5일)
+    consecutive_days = 0
+    for d in foreign_data[:5]:
+        f_qty = int(str(d.get("frgn_ntby_qty", 0)).replace(",", "") or 0)
+        o_qty = int(str(d.get("orgn_ntby_qty", 0)).replace(",", "") or 0)
+        if f_qty > 0 or o_qty > 0:
+            consecutive_days += 1
+        else:
+            break
+
+    # flow_score: 0.0 ~ 1.0
+    score = 0.0
+    if foreign_buying:
+        score += 0.3
+    if institution_buying:
+        score += 0.3
+    if both_buying:
+        score += 0.2
+    if consecutive_days >= 3:
+        score += 0.2
+    elif consecutive_days >= 2:
+        score += 0.1
+
+    return {
+        "foreign_buying": foreign_buying,
+        "institution_buying": institution_buying,
+        "both_buying": both_buying,
+        "consecutive_days": consecutive_days,
+        "flow_score": round(min(score, 1.0), 2),
+    }
+
+
+def is_real_buying(candles_5m: list[dict]) -> tuple[bool, str]:
+    """실제 매수세 vs dead cat bounce 판별.
+
+    Oracle 기준:
+    - volume_ratio > 1.5
+    - buying_ratio > 0.6 (close-low / high-low)
+    - 연속 green candle + rising volume
+
+    Returns: (is_real, reason)
+    """
+    if len(candles_5m) < 2:
+        return False, "캔들 데이터 부족"
+
+    # 최근 2~3개 캔들 분석 (최신순)
+    recent = candles_5m[:3]
+
+    green_count = 0
+    total_buying_ratio = 0.0
+    prev_vol = 0
+
+    for i, c in enumerate(recent):
+        high = int(str(c.get("high", 0)).replace(",", "") or 0)
+        low = int(str(c.get("low", 0)).replace(",", "") or 0)
+        close = int(str(c.get("close", 0)).replace(",", "") or 0)
+        opn = int(str(c.get("open", 0)).replace(",", "") or 0)
+        volume = int(str(c.get("volume", 0)).replace(",", "") or 0)
+
+        if high <= low:
+            continue
+
+        # Buying ratio: close-low / high-low
+        buying_ratio = (close - low) / (high - low)
+        total_buying_ratio += buying_ratio
+
+        if close >= opn:
+            green_count += 1
+
+        prev_vol = volume
+
+    avg_buying_ratio = total_buying_ratio / len(recent) if recent else 0
+
+    # 직전 캔들 대비 거래량 비율
+    curr_vol = int(str(candles_5m[0].get("volume", 0)).replace(",", "") or 0)
+    prev_candle_vol = int(str(candles_5m[1].get("volume", 0)).replace(",", "") or 0) if len(candles_5m) >= 2 else 1
+    volume_ratio = curr_vol / max(prev_candle_vol, 1)
+
+    # 종합 판정
+    reasons = []
+    is_real = True
+
+    if volume_ratio < 1.5:
+        is_real = False
+        reasons.append(f"거래량 부족 ({volume_ratio:.1f}x < 1.5x)")
+
+    if avg_buying_ratio < 0.6:
+        is_real = False
+        reasons.append(f"매수세 약함 (buying_ratio {avg_buying_ratio:.2f} < 0.6)")
+
+    if green_count < 2:
+        is_real = False
+        reasons.append(f"양봉 부족 ({green_count}/{len(recent)})")
+
+    if is_real:
+        return True, f"실매수세 확인 (vol {volume_ratio:.1f}x, buy_ratio {avg_buying_ratio:.2f}, 양봉 {green_count}/{len(recent)})"
+    return False, ", ".join(reasons)
+
+
+def assess_entry_quality(
+    code: str,
+    kis: KISClient,
+    candles_5m: list[dict],
+    foreign_data: list[dict],
+) -> dict:
+    """진입 품질 종합 판정 — VWAP + 호가 + 수급 조합.
+
+    Returns:
+        {"quality": "premium"|"standard"|"weak",
+         "vwap_ok": bool, "orderbook_ok": bool, "flow_ok": bool,
+         "stop_loss_pct": float, "position_scale": float,
+         "details": str,
+         "vwap_data": dict, "orderbook_data": dict, "flow_data": dict}
+    """
+    details = []
+
+    # 1) VWAP 분석
+    vwap_ok = False
+    vwap_data = {"vwap": 0.0, "deviation_pct": 0.0, "above_vwap": False}
+    if config.VWAP_ENABLED and candles_5m:
+        vwap_data = calculate_vwap(candles_5m)
+        if vwap_data["above_vwap"] and vwap_data["deviation_pct"] <= config.VWAP_ENTRY_MAX_DEVIATION_PCT:
+            vwap_ok = True
+            details.append(f"VWAP✓ (deviation {vwap_data['deviation_pct']:+.1f}%)")
+        elif not vwap_data["above_vwap"]:
+            details.append("VWAP✗ (하회)")
+        else:
+            details.append(f"VWAP✗ (과열 +{vwap_data['deviation_pct']:.1f}%)")
+    else:
+        details.append("VWAP 비활성")
+
+    # 2) 호가 분석
+    orderbook_ok = False
+    orderbook_data = {"ratio": 1.0, "bid_wall": False, "ask_wall": False, "signal": "neutral"}
+    if config.ORDERBOOK_ENABLED:
+        try:
+            ob = kis.get_orderbook(code)
+            orderbook_data = calculate_orderbook_imbalance(ob)
+            if orderbook_data["signal"] == "buy":
+                orderbook_ok = True
+                details.append(f"호가✓ (bid/ask {orderbook_data['ratio']:.2f})")
+            else:
+                details.append(f"호가✗ ({orderbook_data['signal']}, {orderbook_data['ratio']:.2f})")
+        except Exception as e:
+            logger.warning("호가 조회 실패 %s: %s", code, e)
+            details.append("호가 조회 실패")
+    else:
+        details.append("호가 비활성")
+
+    # 3) 수급 분석
+    flow_ok = False
+    flow_data = analyze_institutional_flow(foreign_data)
+    if config.FLOW_BONUS_ENABLED:
+        if flow_data["both_buying"]:
+            flow_ok = True
+            details.append(f"수급✓ (외국인+기관 동시매수, {flow_data['consecutive_days']}일연속)")
+        elif flow_data["foreign_buying"] or flow_data["institution_buying"]:
+            flow_ok = True
+            who = "외국인" if flow_data["foreign_buying"] else "기관"
+            details.append(f"수급△ ({who} 순매수)")
+        else:
+            details.append("수급✗ (순매도)")
+    else:
+        details.append("수급 비활성")
+
+    # 품질 등급 판정
+    ok_count = sum([vwap_ok, orderbook_ok, flow_ok])
+    if ok_count >= 3:
+        quality = "premium"
+    elif ok_count >= 2:
+        quality = "standard"
+    else:
+        quality = "weak"
+
+    # config에서 stop_loss_pct, position_scale 조회
+    stop_loss_pct = config.TIGHT_STOP_LOSS_PCT  # default
+    for signal_name, pct in config.TIGHT_STOP_BY_SIGNAL:
+        if signal_name == quality:
+            stop_loss_pct = pct
+            break
+
+    position_scale = config.ENTRY_QUALITY_POSITION_SCALE.get(quality, 0.7)
+
+    return {
+        "quality": quality,
+        "vwap_ok": vwap_ok,
+        "orderbook_ok": orderbook_ok,
+        "flow_ok": flow_ok,
+        "stop_loss_pct": stop_loss_pct,
+        "position_scale": position_scale,
+        "details": " | ".join(details),
+        "vwap_data": vwap_data,
+        "orderbook_data": orderbook_data,
+        "flow_data": flow_data,
+    }

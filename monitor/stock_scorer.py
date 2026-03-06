@@ -1,17 +1,18 @@
 """
 정량 스코어링 모듈 — enriched stock 데이터로 0-100점 산출
-
-스코어 구성:
   모멘텀 (25점)  — 5분봉 양봉 연속 + 거래량 증가 추세
   거래량 (20점)  — 전일 대비 당일 거래량 배율
   가격위치 (15점) — 20일 고점 대비 현재 위치
   수급 (15점)    — 외국인/기관 연속 순매수 일수
   뉴스 (10점)    — 뉴스 촉매 유무 + 건수 가산
   돌파 (15점)    — 일봉 연속 양봉 + 거래량 급증 (아이티켐형 발굴)
+비대칭 R:R 보너스 (가산):
+  VWAP 보너스    — VWAP 위 + deviation 낮으면 +5
+  수급 보너스    — 기관+외국인 동시매수 시 FLOW_SCORE_BONUS 배율
 """
 
 import logging
-
+import config
 logger = logging.getLogger(__name__)
 
 
@@ -22,16 +23,26 @@ def score_stock(stock: dict, is_market_open: bool) -> dict:
     supply_demand = _score_supply_demand(stock)
     news_catalyst = _score_news_catalyst(stock)
     breakout = _score_breakout(stock)
+    base = momentum + volume_ratio + price_position + supply_demand + news_catalyst + breakout
 
-    total = max(0, min(100, momentum + volume_ratio + price_position + supply_demand + news_catalyst + breakout))
+    # --- 비대칭 R:R 보너스 ---
+    vwap_bonus = _score_vwap_bonus(stock, is_market_open)
+    flow_multiplier = _score_flow_bonus(stock)
 
+    total = base + vwap_bonus
+    if flow_multiplier > 1.0:
+        total = int(total * flow_multiplier)
+    total = max(0, min(100, total))
     breakdown = (
         f"총점 {total} = "
         f"모멘텀 {momentum}/25 + 거래량 {volume_ratio}/20 + "
         f"가격위치 {price_position}/15 + 수급 {supply_demand}/15 + "
         f"뉴스 {news_catalyst}/10 + 돌파 {breakout}/15"
     )
-
+    if vwap_bonus > 0:
+        breakdown += f" + VWAP보너스 +{vwap_bonus}"
+    if flow_multiplier > 1.0:
+        breakdown += f" × 수급보너스 {flow_multiplier}"
     return {
         "total": total,
         "momentum": momentum,
@@ -40,6 +51,8 @@ def score_stock(stock: dict, is_market_open: bool) -> dict:
         "supply_demand": supply_demand,
         "news_catalyst": news_catalyst,
         "breakout": breakout,
+        "vwap_bonus": vwap_bonus,
+        "flow_multiplier": flow_multiplier,
         "breakdown": breakdown,
     }
 
@@ -253,6 +266,51 @@ def _score_news_catalyst(stock: dict) -> int:
         return 10
     return 6
 
+
+def _score_vwap_bonus(stock: dict, is_market_open: bool) -> int:
+    """0~5점. VWAP 위 + deviation 낮으면 보너스 (장중만)."""
+    if not is_market_open or not config.VWAP_ENABLED:
+        return 0
+
+    candles = stock.get("minute_candles_5m", [])
+    if not candles:
+        return 0
+
+    try:
+        from market_data import calculate_vwap
+        vwap_result = calculate_vwap(candles)
+    except Exception:
+        return 0
+
+    if not vwap_result.get("above_vwap", False):
+        return 0
+
+    dev = abs(vwap_result.get("deviation_pct", 99))
+    if dev <= 1.0:
+        return 5  # VWAP 근접 + 위 = 최고 품질
+    if dev <= config.VWAP_ENTRY_MAX_DEVIATION_PCT:
+        return 3  # VWAP 위이지만 약간 과열
+    return 0    # 과열 → 보너스 없음
+
+
+def _score_flow_bonus(stock: dict) -> float:
+    """수급 보너스 배율. 기관+외국인 동시 순매수 시 FLOW_SCORE_BONUS(1.25x)."""
+    if not config.FLOW_BONUS_ENABLED:
+        return 1.0
+
+    foreign = stock.get("foreign_institution", [])
+    if not foreign:
+        return 1.0
+
+    try:
+        from market_data import analyze_institutional_flow
+        flow = analyze_institutional_flow(foreign)
+    except Exception:
+        return 1.0
+
+    if flow.get("both_buying", False):
+        return config.FLOW_SCORE_BONUS  # 1.25
+    return 1.0
 
 def _to_int(val) -> int:
     if isinstance(val, int):

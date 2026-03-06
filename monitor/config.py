@@ -390,3 +390,76 @@ TAX_PCT = float(os.getenv("TAX_PCT", "0.18"))
 # --- Dry-run 모의투자 모드 ---
 # --dry-run 플래그로 활성화: 전체 파이프라인 실행하되 실제 주문 없이 시뮬레이션
 DRY_RUN = False
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 비대칭 R:R 전략 — "잃을때 적게, 딸때 많이"
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# --- VWAP (Volume Weighted Average Price) ---
+VWAP_ENABLED = os.getenv("VWAP_ENABLED", "true").lower() == "true"
+VWAP_ENTRY_MAX_DEVIATION_PCT = float(
+    os.getenv("VWAP_ENTRY_MAX_DEVIATION_PCT", "2.0")
+)  # VWAP 대비 +2% 초과 시 과열 경고 (진입 차단은 아님, 스코어 감점)
+VWAP_EXIT_BELOW = os.getenv("VWAP_EXIT_BELOW", "true").lower() == "true"
+VWAP_BREAK_CONFIRM_CANDLES = int(
+    os.getenv("VWAP_BREAK_CONFIRM_CANDLES", "2")
+)  # VWAP 하회 2캔들 연속 시 exit 트리거
+
+# --- 호가창 (Orderbook) ---
+ORDERBOOK_ENABLED = os.getenv("ORDERBOOK_ENABLED", "true").lower() == "true"
+ORDERBOOK_MIN_BID_ASK_RATIO = float(
+    os.getenv("ORDERBOOK_MIN_BID_ASK_RATIO", "1.2")
+)  # 매수잔량/매도잔량 최소 비율 (진입 품질 시그널)
+ORDERBOOK_WALL_THRESHOLD = float(
+    os.getenv("ORDERBOOK_WALL_THRESHOLD", "3.0")
+)  # 평균 대비 3배 이상 → wall 감지
+
+# --- 기관/외국인 수급 보너스 ---
+FLOW_BONUS_ENABLED = os.getenv("FLOW_BONUS_ENABLED", "true").lower() == "true"
+FLOW_SCORE_BONUS = float(
+    os.getenv("FLOW_SCORE_BONUS", "1.25")
+)  # 기관+외국인 순매수 종목 스코어 25% 보너스
+FLOW_REVERSAL_EXIT = os.getenv("FLOW_REVERSAL_EXIT", "true").lower() == "true"
+
+# --- 비대칭 손절 (타이트 — 핵심: 잃을때 적게) ---
+TIGHT_STOP_LOSS_PCT = float(
+    os.getenv("TIGHT_STOP_LOSS_PCT", "1.2")
+)  # 기본 손절 -1.2% (기존 -2.5%에서 강화)
+TIGHT_STOP_BY_SIGNAL = [
+    ("premium", 1.5),   # VWAP+호가+수급 3중 확인 → -1.5% (숨 여유)
+    ("standard", 1.2),  # 기본 -1.2%
+    ("weak", 0.8),      # 신호 약할 때 -0.8% (빠른 탈출)
+]
+
+# --- 비대칭 수익 실현 (티어드 분할매도 — 핵심: 딸때 많이) ---
+TIERED_SELL_ENABLED = os.getenv("TIERED_SELL_ENABLED", "true").lower() == "true"
+TIERED_SELL_LEVELS = [
+    (1.5, 40),   # +1.5% 도달 → 보유량의 40% 매도 (수수료 커버 + α)
+    (3.0, 50),   # +3.0% 도달 → 남은 수량의 50% 매도
+    # 나머지 → 공격적 트레일링으로 최대 수익 추구
+]
+TIERED_REMAINDER_TRAILING_PCT = float(
+    os.getenv("TIERED_REMAINDER_TRAILING_PCT", "1.5")
+)  # 분할매도 후 잔여분: 고점 대비 -1.5%에서 매도
+
+# --- 시간 정지 (강화) ---
+TIME_STOP_FLAT_MINUTES = int(
+    os.getenv("TIME_STOP_FLAT_MINUTES", "15")
+)  # 15분간 횡보 시 exit
+TIME_STOP_FLAT_THRESHOLD_PCT = float(
+    os.getenv("TIME_STOP_FLAT_THRESHOLD_PCT", "0.3")
+)  # ±0.3% 이내면 횡보 판정
+# TIME_STOP_LOSING_MINUTES — 백테스트에서 해로움 판명 → 비활성화
+# 모멘텀 종목 매수 직후 잠깐 딥이 정상인데 바로 청산하여 반등 기회 차단
+# tight_stop(-1.2%)이 이미 큰 손실 방어하므로 중복
+TIME_STOP_LOSING_MINUTES = 0  # 비활성화
+
+# --- 진입 품질 등급 (VWAP+호가+수급 조합) ---
+# premium: VWAP 근접 + 호가 매수우위 + 기관순매수 → 넓은 손절, 큰 포지션
+# standard: 2개 이상 충족 → 기본
+# weak: 1개 이하 → 좁은 손절, 작은 포지션
+ENTRY_QUALITY_POSITION_SCALE = {
+    "premium": 1.0,    # 풀 포지션 (MAX_POSITION_PCT 그대로)
+    "standard": 0.7,   # 70%
+    "weak": 0.5,       # 50%
+}

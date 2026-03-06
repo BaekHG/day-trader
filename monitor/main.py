@@ -491,6 +491,26 @@ def _try_momentum_entry(
     if cur_price <= 0:
         return None
 
+    # --- 진입 품질 판정 (비대칭 R:R) ---
+    try:
+        from market_data import assess_entry_quality
+        # enriched 데이터에서 5분봉, 수급 데이터 추출
+        candles_5m = top.get("minute_candles_5m", [])
+        foreign_data = top.get("foreign_institution", [])
+        eq_result = assess_entry_quality(code, kis, candles_5m, foreign_data)
+        entry_quality = eq_result["quality"]
+        eq_stop_pct = eq_result["stop_loss_pct"]
+        eq_position_scale = eq_result["position_scale"]
+        eq_details = eq_result["details"]
+        logger.info("진입 품질: %s — %s (손절 -%.1f%%, 포지션 %.0f%%)",
+                    entry_quality, eq_details, eq_stop_pct, eq_position_scale * 100)
+    except Exception as e:
+        logger.warning("진입 품질 판정 실패: %s — standard 적용", e)
+        entry_quality = "standard"
+        eq_stop_pct = config.TIGHT_STOP_LOSS_PCT
+        eq_position_scale = config.ENTRY_QUALITY_POSITION_SCALE.get("standard", 0.7)
+        eq_details = "판정 실패 (standard 기본)"
+
     try:
         available_cash = kis.get_available_cash()
     except Exception:
@@ -503,22 +523,15 @@ def _try_momentum_entry(
         pos_pct = config.LATE_SESSION_POSITION_PCT
     else:
         pos_pct = config.MAX_POSITION_PCT
-    position_cash = int(available_cash * pos_pct / 100)
+    # 비대칭 R:R: entry_quality에 따라 포지션 스케일링
+    position_cash = int(available_cash * pos_pct / 100 * eq_position_scale)
     quantity = position_cash // cur_price
     if quantity <= 0:
         logger.info("모멘텀 주문 가능 수량 0주 — 스킵")
         return None
 
-    if late:
-        stop_pct = config.LATE_SESSION_STOP_LOSS_PCT
-    elif boosted:
-        stop_pct = config.BOOST_STOP_LOSS_PCT
-    else:
-        stop_pct = config.MOMENTUM_STOP_LOSS_PCT
-        for score_threshold, pct in config.MOMENTUM_STOP_LOSS_BY_SCORE:
-            if m_score >= score_threshold:
-                stop_pct = pct
-                break
+    # 비대칭 R:R: entry_quality 기반 타이트 손절
+    stop_pct = eq_stop_pct
     stop_loss = int(cur_price * (1 - stop_pct / 100))
 
     # 모멘텀: 상한 지정가 (현재가 + 1% 버퍼) — 빠른 체결 + 슬리피지 제한
@@ -594,6 +607,9 @@ def _try_momentum_entry(
     else:
         mode_reason = '풀백 확인 후 진입'
 
+    # 진입 품질 해석
+    eq_emoji = "🏆" if entry_quality == "premium" else ("✅" if entry_quality == "standard" else "⚠️")
+
     reasons = [
         f'\U0001f680 <b>모멘텀 매수 진행</b>\n',
         f'{name} ({code}) {change_pct:+.1f}%',
@@ -603,6 +619,8 @@ def _try_momentum_entry(
         f'• {hr_reason}',
         f'• {score_reason}',
         f'• {mode_reason}',
+        f'• {eq_emoji} 진입 품질: {entry_quality.upper()} ({eq_details})',
+        f'• 포지션: {eq_position_scale*100:.0f}% | 손절: -{eq_stop_pct}%',
     ]
     if theme_label:
         reasons.append(f'• 테마: {theme_label}')
@@ -635,7 +653,7 @@ def _try_momentum_entry(
         f = fills[0]
         fill_price = f["price"]
         buy_slippage = (fill_price - cur_price) / cur_price * 100 if cur_price > 0 else 0
-        adjusted_stop = int(fill_price * (1 - stop_pct / 100))
+        adjusted_stop = int(fill_price * (1 - eq_stop_pct / 100))
 
         bot.send_fill_confirmation(fills, strategy='momentum')
         monitor.add_position(
@@ -652,6 +670,7 @@ def _try_momentum_entry(
             phase="momentum",
             is_momentum=True,
             today_open=today_open,
+            entry_quality=entry_quality,
         )
 
         if not config.DRY_RUN and db:
@@ -742,19 +761,40 @@ def _try_pullback_entry(
         logger.info("눌림목 진입 대상: %s (되돌림 %.0f%%, 현재 %s)",
                     name, retracement * 100, f"{current:,}")
 
+        # --- 진입 품질 판정 (비대칭 R:R) ---
+        try:
+            from market_data import assess_entry_quality
+            candles_5m = []  # 눌림목은 별도 5분봉 없음
+            foreign_data = []
+            eq_result = assess_entry_quality(code, kis, candles_5m, foreign_data)
+            pb_entry_quality = eq_result["quality"]
+            pb_eq_stop_pct = eq_result["stop_loss_pct"]
+            pb_eq_position_scale = eq_result["position_scale"]
+            pb_eq_details = eq_result["details"]
+            logger.info("눌림목 진입 품질: %s — %s (손절 -%.1f%%, 포지션 %.0f%%)",
+                        pb_entry_quality, pb_eq_details, pb_eq_stop_pct, pb_eq_position_scale * 100)
+        except Exception as e:
+            logger.warning("눌림목 진입 품질 판정 실패: %s — standard 적용", e)
+            pb_entry_quality = "standard"
+            pb_eq_stop_pct = config.TIGHT_STOP_LOSS_PCT
+            pb_eq_position_scale = config.ENTRY_QUALITY_POSITION_SCALE.get("standard", 0.7)
+            pb_eq_details = "판정 실패 (standard 기본)"
+
         try:
             available_cash = kis.get_available_cash()
         except Exception:
             logger.warning("예수금 조회 실패 — 눌림목 진입 스킵")
             continue
 
-        position_cash = int(available_cash * config.AFTERNOON_MAX_POSITION_PCT / 100)
+        # 비대칭 R:R: entry_quality에 따라 포지션 스케일링
+        position_cash = int(available_cash * config.AFTERNOON_MAX_POSITION_PCT / 100 * pb_eq_position_scale)
         order_price = round_to_tick(int(current * 1.005))
         quantity = position_cash // order_price
         if quantity <= 0:
             continue
 
-        stop_loss = int(current * (1 - config.PULLBACK_STOP_LOSS_PCT / 100))
+        # 비대칭 R:R: entry_quality 기반 타이트 손절
+        stop_loss = int(current * (1 - pb_eq_stop_pct / 100))
         target = int(current * (1 + config.PULLBACK_TARGET_PCT / 100))
 
         # 매수 이유 구체화 — 숫자를 해석해서 사람이 납득할 수 있게
@@ -778,6 +818,9 @@ def _try_pullback_entry(
         else:
             bounce_reason = f'저점 대비 +{bounce_pct:.1f}% 반등 — 초기 반등'
 
+        # 진입 품질 해석
+        pb_eq_emoji = "🏆" if pb_entry_quality == "premium" else ("✅" if pb_entry_quality == "standard" else "⚠️")
+
         reasons = [
             f'\U0001f4c9 <b>눌림목 반등 매수</b>\n',
             f'{name} ({code}) 현재 {change_pct:+.1f}%',
@@ -788,11 +831,13 @@ def _try_pullback_entry(
             f'• {bounce_reason}',
             f'• 전일대비 +{change_pct:.1f}% 유지 — 상승 추세 유효',
             f'• {candidate_count}개 급등주 중 최적 진입점',
+            f'• {pb_eq_emoji} 진입 품질: {pb_entry_quality.upper()} ({pb_eq_details})',
+            f'• 포지션: {pb_eq_position_scale*100:.0f}% | 손절: -{pb_eq_stop_pct}%',
             f'',
             f'\U0001f4b0 <b>주문</b>',
             f'{quantity}주 × {order_price:,}원',
             f'목표: {target:,}원 (+{config.PULLBACK_TARGET_PCT}%)',
-            f'손절: {stop_loss:,}원 (-{config.PULLBACK_STOP_LOSS_PCT}%)',
+            f'손절: {stop_loss:,}원 (-{pb_eq_stop_pct}%)',
         ]
         bot.send_message('\n'.join(reasons))
 
@@ -834,9 +879,10 @@ def _try_pullback_entry(
                 quantity=f["quantity"], entry_price=fill_price,
                 target1=int(fill_price * (1 + config.PULLBACK_TARGET_PCT / 100)),
                 target2=int(fill_price * 1.05),
-                stop_loss=int(fill_price * (1 - config.PULLBACK_STOP_LOSS_PCT / 100)),
+                stop_loss=int(fill_price * (1 - pb_eq_stop_pct / 100)),
                 sell_strategy={"type": "pullback", "target_pct": config.PULLBACK_TARGET_PCT},
                 buy_slippage_pct=slippage, score=0, phase="pullback", is_momentum=False,
+                entry_quality=pb_entry_quality,
             )
             bot.send_fill_confirmation(fills, strategy='pullback')
             if not config.DRY_RUN and db:
@@ -977,6 +1023,7 @@ def _try_reinvest(
                         target1=mo["target1"], target2=mo["target2"],
                         stop_loss=adjusted_stop,
                         sell_strategy=mo.get("sell_strategy"),
+                        entry_quality="standard",
                     )
 
         filled_codes = {nf["stock_code"] for nf in new_fills}
@@ -1700,6 +1747,7 @@ def _run_one_cycle(
                     buy_slippage_pct=buy_slippage_pct,
                     score=matching_order.get("score", 0),
                     phase=phase,
+                    entry_quality="standard",
                 )
 
     pending = []
@@ -1755,6 +1803,7 @@ def _run_one_cycle(
                             target2=r.get("target2", 0),
                             stop_loss=adjusted_stop,
                             sell_strategy=r.get("sell_strategy"),
+                            entry_quality="standard",
                         )
     elif not fills:
         bot.send_message("⚠️ 체결 확인 불가 — /balance 명령어로 수동 확인해주세요.")

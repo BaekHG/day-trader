@@ -384,3 +384,24 @@ class KISClient:
             return {"exchange_rate": r.get("closePrice", ""), "change_rate": r.get("compareToPreviousClosePrice", "")}
         except Exception:
             return {}
+
+    def get_orderbook(self, stock_code: str) -> dict:
+        """호가 10단계 조회 (매수/매도 잔량)."""
+        url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn"
+        params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": stock_code}
+        resp = self._get(url, headers=self._headers("FHKST01010200"), params=params)
+        o = resp.json().get("output1", {})
+        if not o:
+            return {}
+        bid_prices = [int(o.get(f"bidp{i}", 0) or 0) for i in range(1, 11)]
+        ask_prices = [int(o.get(f"askp{i}", 0) or 0) for i in range(1, 11)]
+        bid_volumes = [int(o.get(f"bidp_rsqn{i}", 0) or 0) for i in range(1, 11)]
+        ask_volumes = [int(o.get(f"askp_rsqn{i}", 0) or 0) for i in range(1, 11)]
+        return {
+            "bid_prices": bid_prices,
+            "ask_prices": ask_prices,
+            "bid_volumes": bid_volumes,
+            "ask_volumes": ask_volumes,
+            "total_bid_volume": int(o.get("total_bidp_rsqn", 0) or 0),
+            "total_ask_volume": int(o.get("total_askp_rsqn", 0) or 0),
+        }
