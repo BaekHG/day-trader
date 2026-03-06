@@ -359,6 +359,14 @@ def _try_momentum_entry(
                     momentum_losses, config.MOMENTUM_DAILY_MAX_LOSSES)
         return None
 
+
+    # --- 일일 거래 횟수 제한 (수수료 상한 고정) ---
+    total_trades = len(monitor.trades_today)
+    if total_trades >= config.MAX_DAILY_TRADES:
+        logger.info("일일 거래한도 도달 (%d/%d) — 오늘 더 이상 거래 안 함",
+                    total_trades, config.MAX_DAILY_TRADES)
+        return None
+
     logger.info("Phase 2M — 모멘텀 후보 소싱")
     try:
         momentum_stocks = collector.enrich_momentum_candidates(market_data.get("stock_news", {}))

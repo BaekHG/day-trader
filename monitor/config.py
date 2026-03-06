@@ -62,7 +62,7 @@ CYCLE_COOLDOWN = int(os.getenv("CYCLE_COOLDOWN", "180"))  # 사이클 간 쿨다
 
 # --- 오후 전략: 눌림목 반등 매매 (10:30~14:00) ---
 AFTERNOON_ENABLED = (
-    os.getenv("AFTERNOON_ENABLED", "true").lower() == "true"
+    os.getenv("AFTERNOON_ENABLED", "false").lower() == "true"
 )  # False→True!
 AFTERNOON_PHASE_START = os.getenv("AFTERNOON_PHASE_START", "10:30")  # 11:00→10:30
 AFTERNOON_PHASE_END = os.getenv("AFTERNOON_PHASE_END", "14:00")  # 14:30→14:00
@@ -81,14 +81,14 @@ AFTERNOON_HARD_FILTER_CHANGE_MIN = float(
     os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MIN", "0.5")
 )  # 오후 재투자 등락률 하한
 AFTERNOON_HARD_FILTER_CHANGE_MAX = float(
-    os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MAX", "8.0")
+    os.getenv("AFTERNOON_HARD_FILTER_CHANGE_MAX", "25.0")
 )  # 오후 재투자 등락률 상한 (오전 6→8%)
 MORNING_HARD_FILTER_CHANGE_MAX = float(
-    os.getenv("MORNING_HARD_FILTER_CHANGE_MAX", "8.0")
-)  # 오전 등락률 상한 (6→8%, 오후와 통일)
+    os.getenv("MORNING_HARD_FILTER_CHANGE_MAX", "25.0")
+)  # 오전 등락률 상한 (8→25%, 모멘텀 급등주 허용)
 HARD_FILTER_MAX_CHANGE = float(
-    os.getenv("HARD_FILTER_MAX_CHANGE", "15.0")
-)  # 급등 필터 상한 (10→15%, 강세장 대응)
+    os.getenv("HARD_FILTER_MAX_CHANGE", "29.0")
+)  # 급등 필터 상한 (15→29%, 상한가 직전까지 허용)
 # 눌림목 전략 전용 파라미터
 PULLBACK_MIN_MORNING_CHANGE = float(
     os.getenv("PULLBACK_MIN_MORNING_CHANGE", "5.0")
@@ -245,8 +245,14 @@ MOMENTUM_TIME_STOP_MIN_PROFIT = float(
     os.getenv("MOMENTUM_TIME_STOP_MIN_PROFIT", "0.5")
 )  # 20분 후 +0.5% 미만이면 청산
 MOMENTUM_DAILY_MAX_LOSSES = int(
-    os.getenv("MOMENTUM_DAILY_MAX_LOSSES", "6")
-)  # 2→6: 오전+오후 하루 종일 매매 — 손절 6회까지 허용
+    os.getenv("MOMENTUM_DAILY_MAX_LOSSES", "3")
+)  # 6→3: 하루 최대 3번 손절 — 수수료 절약, 3연패 후 그날은 쉼
+MAX_DAILY_TRADES = int(
+    os.getenv("MAX_DAILY_TRADES", "5")
+)  # 하루 최대 5회 거래 (승패 무관) — 수수료 상한 고정
+SLIPPAGE_GUARD_PCT = float(
+    os.getenv("SLIPPAGE_GUARD_PCT", "0.3")
+)  # 매수 슬리피지 0.3% 초과 시 즉시 청산
 MOMENTUM_OPTIMAL_CHANGE_MIN = float(
     os.getenv("MOMENTUM_OPTIMAL_CHANGE_MIN", "8.0")
 )  # 스코어링: 최적 등락률 하한

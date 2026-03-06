@@ -142,6 +142,19 @@ class PositionMonitor:
             remaining = pos["remaining_qty"]
             cost_pct = config.COMMISSION_PCT * 2 + config.TAX_PCT
             pnl_pct = ((current - entry) / entry * 100 - cost_pct) if entry else 0
+
+            # === 슬리피지 가드: 매수 슬리피지 과다 시 즉시 청산 ===
+            if not pos.get("_slippage_checked"):
+                pos["_slippage_checked"] = True
+                self._save_positions()
+                slip = pos.get("buy_slippage_pct", 0.0)
+                if slip > config.SLIPPAGE_GUARD_PCT:
+                    self._execute_sell(
+                        code, pos, remaining, current,
+                        f"슬리피지 가드 ({slip:.1f}% > {config.SLIPPAGE_GUARD_PCT}%)", pnl_pct,
+                    )
+                    continue
+
             # === Step 1: 장 마감 2단계 청산 (기존 100% 유지) ===
             final_hh, final_mm = map(int, config.FINAL_CLOSE_TIME.split(":"))  # 15:20
             is_final = now.hour > final_hh or (
