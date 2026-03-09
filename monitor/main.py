@@ -472,6 +472,9 @@ def _try_momentum_entry(
 
     if _morning_top_movers:
         _save_morning_top_movers()
+    momentum_stocks = [
+        s for s in momentum_stocks if s.get("mksc_shrn_iscd", "") not in sold_codes
+    ]
     if not momentum_stocks:
         if not _could_crash:
             _last_momentum_scan_summary = getattr(
