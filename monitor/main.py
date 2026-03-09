@@ -423,7 +423,7 @@ def _try_momentum_entry(
 
     # --- 일일 거래 횟수 제한 (수수료 상한 고정) ---
     total_trades = len(monitor.trades_today)
-    if total_trades >= config.MAX_DAILY_TRADES:
+    if total_trades >= config.MAX_DAILY_TRADES and not _could_crash:
         logger.info(
             "일일 거래한도 도달 (%d/%d) — 오늘 더 이상 거래 안 함",
             total_trades,
@@ -1136,7 +1136,10 @@ def _past_entry_cutoff() -> bool:
     )
     hh, mm = map(int, cutoff.split(":"))
     n = now_kst()
-    return n.hour > hh or (n.hour == hh and n.minute >= mm)
+    past = n.hour > hh or (n.hour == hh and n.minute >= mm)
+    if past and config.CRASH_MODE_ENABLED and n.hour < 15:
+        return False
+    return past
 
 
 def _past_afternoon_cutoff() -> bool:
