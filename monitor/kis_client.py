@@ -249,12 +249,12 @@ class KISClient:
                 })
         return pending
 
-    def get_order_fills(self) -> list[dict]:
+    def get_order_fills(self, sll_buy_dvsn: str = "00") -> list[dict]:
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
         today = datetime.now(KST).strftime("%Y%m%d")
         params = {
             "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
-            "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": "02",
+            "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": sll_buy_dvsn,
             "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "01", "ORD_GNO_BRNO": "",
             "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
             "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",

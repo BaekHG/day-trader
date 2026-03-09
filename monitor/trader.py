@@ -312,7 +312,7 @@ class Trader:
                 "amount": o["quantity"] * o["price"],
             } for o in orders]
         try:
-            fills_raw = self.kis.get_order_fills()
+            fills_raw = self.kis.get_order_fills(sll_buy_dvsn="02")
         except Exception as e:
             logger.error("체결 조회 실패: %s", e)
             return None
