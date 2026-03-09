@@ -335,6 +335,9 @@ CRASH_INVERSE_ETFS = [
 ]
 CRASH_MIN_CHANGE_PCT = float(os.getenv("CRASH_MIN_CHANGE_PCT", "2.0"))
 CRASH_STOP_LOSS_PCT = float(os.getenv("CRASH_STOP_LOSS_PCT", "2.0"))
+CRASH_MOMENTUM_OVERRIDE_SCORE = int(
+    os.getenv("CRASH_MOMENTUM_OVERRIDE_SCORE", "100")
+)  # 폭락장에서도 이 스코어 이상이면 모멘텀 우선 (뮤턴트)
 CRASH_TRAILING_STOP_LEVELS = [
     (8.0, 5.0),
     (5.0, 3.0),
@@ -448,16 +451,16 @@ TIGHT_STOP_LOSS_PCT = float(
     os.getenv("TIGHT_STOP_LOSS_PCT", "1.2")
 )  # 기본 손절 -1.2% (기존 -2.5%에서 강화)
 TIGHT_STOP_BY_SIGNAL = [
-    ("premium", 1.5),   # VWAP+호가+수급 3중 확인 → -1.5% (숨 여유)
+    ("premium", 1.5),  # VWAP+호가+수급 3중 확인 → -1.5% (숨 여유)
     ("standard", 1.2),  # 기본 -1.2%
-    ("weak", 0.8),      # 신호 약할 때 -0.8% (빠른 탈출)
+    ("weak", 0.8),  # 신호 약할 때 -0.8% (빠른 탈출)
 ]
 
 # --- 비대칭 수익 실현 (티어드 분할매도 — 핵심: 딸때 많이) ---
 TIERED_SELL_ENABLED = os.getenv("TIERED_SELL_ENABLED", "true").lower() == "true"
 TIERED_SELL_LEVELS = [
-    (1.5, 40),   # +1.5% 도달 → 보유량의 40% 매도 (수수료 커버 + α)
-    (3.0, 50),   # +3.0% 도달 → 남은 수량의 50% 매도
+    (1.5, 40),  # +1.5% 도달 → 보유량의 40% 매도 (수수료 커버 + α)
+    (3.0, 50),  # +3.0% 도달 → 남은 수량의 50% 매도
     # 나머지 → 공격적 트레일링으로 최대 수익 추구
 ]
 TIERED_REMAINDER_TRAILING_PCT = float(
@@ -481,7 +484,7 @@ TIME_STOP_LOSING_MINUTES = 0  # 비활성화
 # standard: 2개 이상 충족 → 기본
 # weak: 1개 이하 → 좁은 손절, 작은 포지션
 ENTRY_QUALITY_POSITION_SCALE = {
-    "premium": 1.0,    # 풀 포지션 (MAX_POSITION_PCT 그대로)
-    "standard": 0.7,   # 70%
-    "weak": 0.5,       # 50%
+    "premium": 1.0,  # 풀 포지션 (MAX_POSITION_PCT 그대로)
+    "standard": 0.7,  # 70%
+    "weak": 0.5,  # 50%
 }

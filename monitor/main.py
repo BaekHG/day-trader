@@ -524,10 +524,58 @@ def _try_momentum_entry(
         )
         return None
 
-    # KOSDAQ 하락 차단: 스코어가 오버라이드 기준 이상이면 진입 허용
     _crash_mode = False
     if _kosdaq_blocked:
-        if m_score >= config.MARKET_INDEX_OVERRIDE_SCORE:
+        if config.CRASH_MODE_ENABLED and kosdaq_change <= config.CRASH_MODE_THRESHOLD:
+            if m_score >= config.CRASH_MOMENTUM_OVERRIDE_SCORE:
+                logger.info(
+                    "KOSDAQ %.1f%% 폭락 + 스코어 %.1f ≥ %d — 뮤턴트 모멘텀 우선",
+                    kosdaq_change,
+                    m_score,
+                    config.CRASH_MOMENTUM_OVERRIDE_SCORE,
+                )
+                bot.send_message(
+                    f"🦸 KOSDAQ {kosdaq_change:+.1f}% 폭락이지만\n"
+                    f"{name} 스코어 {m_score:.1f} ≥ {config.CRASH_MOMENTUM_OVERRIDE_SCORE} — 뮤턴트 모멘텀 진입"
+                )
+            else:
+                logger.info(
+                    "KOSDAQ %.1f%% — 크래시 모드 진입 (임계값 %.1f%%)",
+                    kosdaq_change,
+                    config.CRASH_MODE_THRESHOLD,
+                )
+                try:
+                    crash_candidates = collector.fetch_crash_inverse_candidates()
+                except Exception as e:
+                    logger.warning("크래시 인버스 소싱 실패: %s", e)
+                    crash_candidates = []
+                if crash_candidates:
+                    top = crash_candidates[0]
+                    code = top["mksc_shrn_iscd"]
+                    name = top["hts_kor_isnm"]
+                    change_pct = float(top.get("prdy_ctrt", 0))
+                    m_score = top.get("momentum_score", 0)
+                    _crash_mode = True
+                    bot.send_message(
+                        f"📉 <b>크래시 모드 — 인버스 진입</b>\n\n"
+                        f"KOSDAQ {kosdaq_change:+.1f}%\n"
+                        f"{name} ({code})\n"
+                        f"등락률: {change_pct:+.1f}%\n"
+                        f"스코어: {m_score:.1f}"
+                    )
+                else:
+                    if m_score >= config.MARKET_INDEX_OVERRIDE_SCORE:
+                        logger.info(
+                            "크래시 인버스 후보 없음 — 스코어 %.1f로 모멘텀 폴백",
+                            m_score,
+                        )
+                        bot.send_message(
+                            f"📉 인버스 후보 없음 → {name} 스코어 {m_score:.1f}로 모멘텀 폴백"
+                        )
+                    else:
+                        logger.info("크래시 모드 — 인버스 후보 없음 + 스코어 부족")
+                        return None
+        elif m_score >= config.MARKET_INDEX_OVERRIDE_SCORE:
             logger.info(
                 "KOSDAQ %.1f%% 하락이지만 스코어 %.1f ≥ %d — 차단 오버라이드",
                 kosdaq_change,
@@ -538,34 +586,6 @@ def _try_momentum_entry(
                 f"⚡ KOSDAQ {kosdaq_change:+.1f}% 하락이지만\n"
                 f"{name} 스코어 {m_score:.1f} ≥ {config.MARKET_INDEX_OVERRIDE_SCORE} — 진입 허용"
             )
-        elif config.CRASH_MODE_ENABLED and kosdaq_change <= config.CRASH_MODE_THRESHOLD:
-            logger.info(
-                "KOSDAQ %.1f%% — 크래시 모드 진입 (임계값 %.1f%%)",
-                kosdaq_change,
-                config.CRASH_MODE_THRESHOLD,
-            )
-            try:
-                crash_candidates = collector.fetch_crash_inverse_candidates()
-            except Exception as e:
-                logger.warning("크래시 인버스 소싱 실패: %s", e)
-                crash_candidates = []
-            if crash_candidates:
-                top = crash_candidates[0]
-                code = top["mksc_shrn_iscd"]
-                name = top["hts_kor_isnm"]
-                change_pct = float(top.get("prdy_ctrt", 0))
-                m_score = top.get("momentum_score", 0)
-                _crash_mode = True
-                bot.send_message(
-                    f"📉 <b>크래시 모드 — 인버스 진입</b>\n\n"
-                    f"KOSDAQ {kosdaq_change:+.1f}%\n"
-                    f"{name} ({code})\n"
-                    f"등락률: {change_pct:+.1f}%\n"
-                    f"스코어: {m_score:.1f}"
-                )
-            else:
-                logger.info("크래시 모드 — 인버스 후보 없음")
-                return None
         else:
             logger.info(
                 "KOSDAQ %.1f%% + 스코어 %.1f < %d — 모멘텀 차단",
