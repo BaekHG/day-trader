@@ -1022,6 +1022,7 @@ class MarketDataCollector:
         return news
 
     def fetch_crash_inverse_candidates(self) -> list[dict]:
+        """크래시 인버스 ETF 후보 조회 + 스코어링."""
         candidates = []
         for code, name, etf_type in config.CRASH_INVERSE_ETFS:
             try:

@@ -343,6 +343,16 @@ CRASH_TRAILING_STOP_LEVELS = [
     (1.5, 0.3),
 ]
 
+# --- 크래시 센티널 (장중 상시 감시) ---
+CRASH_SENTINEL_INTERVAL = int(os.getenv("CRASH_SENTINEL_INTERVAL", "60"))  # 초
+CRASH_VELOCITY_WINDOW = int(os.getenv("CRASH_VELOCITY_WINDOW", "30"))  # 분
+CRASH_VELOCITY_THRESHOLD = float(os.getenv("CRASH_VELOCITY_THRESHOLD", "-1.5"))  # N분내 하락폭
+CRASH_STAGE2_THRESHOLD = float(os.getenv("CRASH_STAGE2_THRESHOLD", "-5.0"))  # 2차 진입 임계
+CRASH_STAGE1_POSITION_PCT = int(os.getenv("CRASH_STAGE1_POSITION_PCT", "50"))  # 1차 비중
+CRASH_STAGE2_POSITION_PCT = int(os.getenv("CRASH_STAGE2_POSITION_PCT", "50"))  # 2차 비중
+CRASH_FORCE_EXIT_TIME = os.getenv("CRASH_FORCE_EXIT_TIME", "15:10")  # 당일 강제 청산
+CRASH_MAX_ENTRIES_PER_DAY = int(os.getenv("CRASH_MAX_ENTRIES_PER_DAY", "2"))  # 일일 최대
+CRASH_RECOVERY_EXIT_PCT = float(os.getenv("CRASH_RECOVERY_EXIT_PCT", "50"))  # 지수 반등 시 청산 (하락폭 N% 회복)
 
 # --- 불장 모드 (Market Boost) — 시장 강세/호재 뉴스 감지 시 공격적 파라미터 ---
 BOOST_ENABLED = os.getenv("BOOST_ENABLED", "true").lower() == "true"
