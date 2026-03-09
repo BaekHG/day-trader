@@ -549,7 +549,7 @@ class PositionMonitor:
             if not config.DRY_RUN:
                 try:
                     time.sleep(1)
-                    fills = self.kis.get_order_fills()
+                    fills = self.kis.get_order_fills(sll_buy_dvsn="01")
                     for f in fills:
                         if (
                             f["stock_code"] == code
