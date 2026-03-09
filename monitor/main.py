@@ -383,7 +383,8 @@ def _try_momentum_entry(
     if not config.MOMENTUM_ENABLED:
         return None
 
-    if len(monitor.positions) >= config.MAX_PICKS:
+    active_positions = sum(1 for p in monitor.positions.values() if not p.get("manual"))
+    if active_positions >= config.MAX_PICKS:
         return None
 
     kosdaq = market_data.get("kosdaq_index", {})
@@ -910,7 +911,8 @@ def _try_pullback_entry(
         logger.info("눌림목 — 오전 급등주 기록 없음")
         return None
 
-    if len(monitor.positions) >= config.MAX_PICKS:
+    active_positions = sum(1 for p in monitor.positions.values() if not p.get("manual"))
+    if active_positions >= config.MAX_PICKS:
         return None
 
     logger.info("눌림목 스캔 — 오전 급등주 %d종목 확인", len(_morning_top_movers))
