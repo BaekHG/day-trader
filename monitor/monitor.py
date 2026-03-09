@@ -150,8 +150,12 @@ class PositionMonitor:
                 slip = pos.get("buy_slippage_pct", 0.0)
                 if slip > config.SLIPPAGE_GUARD_PCT:
                     self._execute_sell(
-                        code, pos, remaining, current,
-                        f"슬리피지 가드 ({slip:.1f}% > {config.SLIPPAGE_GUARD_PCT}%)", pnl_pct,
+                        code,
+                        pos,
+                        remaining,
+                        current,
+                        f"슬리피지 가드 ({slip:.1f}% > {config.SLIPPAGE_GUARD_PCT}%)",
+                        pnl_pct,
                     )
                     continue
 
@@ -222,8 +226,12 @@ class PositionMonitor:
             tight_stop = int(entry * (1 - stop_pct / 100))
             if current <= tight_stop:
                 self._execute_sell(
-                    code, pos, remaining, current,
-                    f"타이트 손절 ({eq}: -{stop_pct}%)", pnl_pct,
+                    code,
+                    pos,
+                    remaining,
+                    current,
+                    f"타이트 손절 ({eq}: -{stop_pct}%)",
+                    pnl_pct,
                 )
                 continue
 
@@ -236,11 +244,14 @@ class PositionMonitor:
                 if hold_minutes >= config.TIME_STOP_FLAT_MINUTES:
                     if abs(pnl_pct) <= config.TIME_STOP_FLAT_THRESHOLD_PCT:
                         self._execute_sell(
-                            code, pos, remaining, current,
-                            f"{config.TIME_STOP_FLAT_MINUTES}분 횡보 정지", pnl_pct,
+                            code,
+                            pos,
+                            remaining,
+                            current,
+                            f"{config.TIME_STOP_FLAT_MINUTES}분 횡보 정지",
+                            pnl_pct,
                         )
                         continue
-
 
             # === Step 4: 모멘텀 시가 하회 (기존 유지) ===
             is_momentum = pos.get("is_momentum", False)
@@ -260,7 +271,9 @@ class PositionMonitor:
             # === Step 5: 티어드 분할매도 ===
             if config.TIERED_SELL_ENABLED:
                 tiered_done = pos.get("tiered_sells_done", [False, False])
-                for tier_idx, (target_pct, sell_pct) in enumerate(config.TIERED_SELL_LEVELS):
+                for tier_idx, (target_pct, sell_pct) in enumerate(
+                    config.TIERED_SELL_LEVELS
+                ):
                     if tier_idx >= len(tiered_done):
                         break
                     if tiered_done[tier_idx]:
@@ -271,8 +284,11 @@ class PositionMonitor:
                             sell_qty = remaining
 
                         self._execute_sell(
-                            code, pos, sell_qty, current,
-                            f"티어드 분할매도 T{tier_idx+1} (+{target_pct}% → {sell_pct}%)",
+                            code,
+                            pos,
+                            sell_qty,
+                            current,
+                            f"티어드 분할매도 T{tier_idx + 1} (+{target_pct}% → {sell_pct}%)",
                             pnl_pct,
                         )
 
@@ -287,10 +303,15 @@ class PositionMonitor:
             if vwap_counter % 3 == 0 and config.VWAP_EXIT_BELOW:
                 try:
                     from market_data import calculate_vwap
+
                     raw_candles = self.kis.get_minute_candles(code)
                     candles_5m = [
-                        {"high": c.get("stck_hgpr", ""), "low": c.get("stck_lwpr", ""),
-                         "close": c.get("stck_prpr", ""), "volume": c.get("cntg_vol", "")}
+                        {
+                            "high": c.get("stck_hgpr", ""),
+                            "low": c.get("stck_lwpr", ""),
+                            "close": c.get("stck_prpr", ""),
+                            "volume": c.get("cntg_vol", ""),
+                        }
                         for c in raw_candles[:12]
                     ]
                     vwap_result = calculate_vwap(candles_5m)
@@ -301,8 +322,12 @@ class PositionMonitor:
 
                     if pos["vwap_below_count"] >= config.VWAP_BREAK_CONFIRM_CANDLES:
                         self._execute_sell(
-                            code, pos, remaining, current,
-                            f"VWAP 이탈 {pos['vwap_below_count']}캔들 연속", pnl_pct,
+                            code,
+                            pos,
+                            remaining,
+                            current,
+                            f"VWAP 이탈 {pos['vwap_below_count']}캔들 연속",
+                            pnl_pct,
                         )
                         continue
                 except Exception as e:
@@ -314,13 +339,18 @@ class PositionMonitor:
             if flow_counter % 20 == 0 and config.FLOW_REVERSAL_EXIT:
                 try:
                     from market_data import analyze_institutional_flow
+
                     foreign = self.kis.get_foreign_institution(code)
                     flow = analyze_institutional_flow(foreign)
                     if not flow["foreign_buying"] and not flow["institution_buying"]:
                         if eq in ("premium", "standard"):
                             self._execute_sell(
-                                code, pos, remaining, current,
-                                "수급 반전 (기관+외국인 순매도 전환)", pnl_pct,
+                                code,
+                                pos,
+                                remaining,
+                                current,
+                                "수급 반전 (기관+외국인 순매도 전환)",
+                                pnl_pct,
                             )
                             continue
                 except Exception as e:
@@ -330,10 +360,15 @@ class PositionMonitor:
             all_tiers_done = all(pos.get("tiered_sells_done", [False]))
             if config.TIERED_SELL_ENABLED and all_tiers_done and remaining > 0:
                 peak = pos.get("peak_price", pos["high_since_entry"])
-                trail_stop = int(peak * (1 - config.TIERED_REMAINDER_TRAILING_PCT / 100))
+                trail_stop = int(
+                    peak * (1 - config.TIERED_REMAINDER_TRAILING_PCT / 100)
+                )
                 if current <= trail_stop:
                     self._execute_sell(
-                        code, pos, remaining, current,
+                        code,
+                        pos,
+                        remaining,
+                        current,
                         f"잔여분 트레일링 (고점 {peak:,} → -{config.TIERED_REMAINDER_TRAILING_PCT}%)",
                         pnl_pct,
                     )
@@ -343,17 +378,24 @@ class PositionMonitor:
                 _boosted = False
                 try:
                     import main as _main_mod
-                    _boosted = getattr(_main_mod, "_boost_state", {}).get("active", False)
+
+                    _boosted = getattr(_main_mod, "_boost_state", {}).get(
+                        "active", False
+                    )
                 except Exception:
                     pass
 
-                if is_momentum and _boosted:
+                if pos.get("is_crash_inverse"):
+                    trailing_levels = config.CRASH_TRAILING_STOP_LEVELS
+                elif is_momentum and _boosted:
                     trailing_levels = config.BOOST_MOMENTUM_TRAILING_STOP_LEVELS
                 elif is_momentum:
                     trailing_levels = config.MOMENTUM_TRAILING_STOP_LEVELS
                 else:
                     trailing_levels = config.TRAILING_STOP_LEVELS
-                high_pnl = (pos["high_since_entry"] - entry) / entry * 100 if entry else 0
+                high_pnl = (
+                    (pos["high_since_entry"] - entry) / entry * 100 if entry else 0
+                )
                 for level_pnl, stop_pnl in trailing_levels:
                     if high_pnl >= level_pnl:
                         trailing_stop = int(entry * (1 + stop_pnl / 100))

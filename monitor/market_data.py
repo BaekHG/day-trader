@@ -1021,6 +1021,74 @@ class MarketDataCollector:
                 pass
         return news
 
+    def fetch_crash_inverse_candidates(self) -> list[dict]:
+        candidates = []
+        for code, name, etf_type in config.CRASH_INVERSE_ETFS:
+            try:
+                url = f"{config.KIS_BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price"
+                params = {"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code}
+                resp = self.kis._get(
+                    url, headers=self.kis._headers("FHKST01010100"), params=params
+                )
+                d = resp.json().get("output", {})
+
+                price = int(d.get("stck_prpr", 0))
+                change_pct = float(d.get("prdy_ctrt", 0))
+                volume = int(d.get("acml_vol", 0))
+                tr_pbmn = int(d.get("acml_tr_pbmn", 0))
+                today_high = int(d.get("stck_hgpr", 0))
+                today_open = int(d.get("stck_oprc", 0))
+
+                if change_pct < config.CRASH_MIN_CHANGE_PCT:
+                    logger.info(
+                        "크래시 제외 [등락률 %.1f%% < %.1f%%]: %s",
+                        change_pct,
+                        config.CRASH_MIN_CHANGE_PCT,
+                        name,
+                    )
+                    continue
+
+                high_ratio = price / today_high if today_high > 0 else 0
+                open_ratio = price / today_open if today_open > 0 else 0
+
+                score = change_pct * 3
+                if high_ratio >= 0.97:
+                    score += 15
+                if open_ratio >= 1.0:
+                    score += 10
+                if tr_pbmn >= 100_000_000_000:
+                    score += 10
+
+                candidates.append(
+                    {
+                        "mksc_shrn_iscd": code,
+                        "hts_kor_isnm": name,
+                        "stck_prpr": str(price),
+                        "prdy_ctrt": str(change_pct),
+                        "acml_vol": str(volume),
+                        "acml_tr_pbmn": str(tr_pbmn),
+                        "stck_hgpr": str(today_high),
+                        "stck_oprc": str(today_open),
+                        "stck_lwpr": d.get("stck_lwpr", "0"),
+                        "momentum_score": score,
+                        "is_crash_inverse": True,
+                        "etf_type": etf_type,
+                    }
+                )
+                logger.info(
+                    "크래시 후보: %s | %s원 (%+.1f%%) | 스코어 %.1f | 거래대금 %s억",
+                    name,
+                    f"{price:,}",
+                    change_pct,
+                    score,
+                    f"{tr_pbmn / 1e8:.0f}",
+                )
+            except Exception as e:
+                logger.warning("크래시 ETF 조회 실패 %s: %s", name, e)
+
+        candidates.sort(key=lambda x: x["momentum_score"], reverse=True)
+        return candidates
+
     @staticmethod
     def _safe(fn, default):
         try:

@@ -326,6 +326,22 @@ MARKET_INDEX_OVERRIDE_SCORE = int(
     os.getenv("MARKET_INDEX_OVERRIDE_SCORE", "70")
 )  # 이 스코어 이상이면 차단 무시
 
+CRASH_MODE_ENABLED = os.getenv("CRASH_MODE_ENABLED", "true").lower() == "true"
+CRASH_MODE_THRESHOLD = float(os.getenv("CRASH_MODE_THRESHOLD", "-3.0"))
+CRASH_INVERSE_ETFS = [
+    ("252670", "KODEX 200선물인버스2X", "kospi_2x"),
+    ("251340", "KODEX 코스닥150선물인버스", "kosdaq_1x"),
+    ("145670", "KODEX 인버스", "kospi_1x"),
+]
+CRASH_MIN_CHANGE_PCT = float(os.getenv("CRASH_MIN_CHANGE_PCT", "2.0"))
+CRASH_STOP_LOSS_PCT = float(os.getenv("CRASH_STOP_LOSS_PCT", "2.0"))
+CRASH_TRAILING_STOP_LEVELS = [
+    (8.0, 5.0),
+    (5.0, 3.0),
+    (3.0, 1.5),
+    (1.5, 0.3),
+]
+
 
 # --- 불장 모드 (Market Boost) — 시장 강세/호재 뉴스 감지 시 공격적 파라미터 ---
 BOOST_ENABLED = os.getenv("BOOST_ENABLED", "true").lower() == "true"

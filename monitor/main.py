@@ -2,6 +2,7 @@
 Day Trader — 자동 단타 매매 시스템
 매일 08:40 분석 → 텔레그램 확인 → 매수 → 모니터링 → 매도 → 리포트
 """
+
 from __future__ import annotations
 
 import logging
@@ -73,10 +74,16 @@ def is_market_hours() -> bool:
     n = now_kst()
     if n.weekday() >= 5:
         return False
-    return n.replace(hour=8, minute=55, second=0) <= n <= n.replace(hour=15, minute=35, second=0)
+    return (
+        n.replace(hour=8, minute=55, second=0)
+        <= n
+        <= n.replace(hour=15, minute=35, second=0)
+    )
 
 
-def wait_until(target_time_str: str, bot: TelegramBot, kis: KISClient, monitor: PositionMonitor):
+def wait_until(
+    target_time_str: str, bot: TelegramBot, kis: KISClient, monitor: PositionMonitor
+):
     """target_time_str = 'HH:MM'. 대기하면서 텔레그램 명령어 처리."""
     hh, mm = map(int, target_time_str.split(":"))
     while True:
@@ -123,8 +130,11 @@ def _recalc_stop_loss(fill_price: int, order_price: int, ai_stop: int) -> int:
     adjusted = int(fill_price * (1 - stop_pct))
     logger.info(
         "손절가 재계산: 주문가 %s → 체결가 %s | AI손절 %s → 조정 %s (%.1f%%)",
-        f"{order_price:,}", f"{fill_price:,}", f"{ai_stop:,}",
-        f"{adjusted:,}", stop_pct * 100,
+        f"{order_price:,}",
+        f"{fill_price:,}",
+        f"{ai_stop:,}",
+        f"{adjusted:,}",
+        stop_pct * 100,
     )
     return adjusted
 
@@ -134,7 +144,11 @@ def _build_score_fallback(top_stock: dict, cur_price: int, phase: str) -> dict:
     name = top_stock.get("hts_kor_isnm", "?")
     code = top_stock.get("mksc_shrn_iscd", "")
     score = top_stock.get("score", 0)
-    stop_pct = config.AFTERNOON_MIN_STOP_LOSS_PCT if phase == "afternoon" else config.MIN_STOP_LOSS_PCT
+    stop_pct = (
+        config.AFTERNOON_MIN_STOP_LOSS_PCT
+        if phase == "afternoon"
+        else config.MIN_STOP_LOSS_PCT
+    )
 
     return {
         "marketAssessment": {
@@ -155,10 +169,17 @@ def _build_score_fallback(top_stock: dict, cur_price: int, phase: str) -> dict:
                 "symbol": code,
                 "name": name,
                 "currentPrice": cur_price,
-                "reason": {"news": "AI 불가", "supply": "스코어 기반", "chart": "스코어 기반"},
+                "reason": {
+                    "news": "AI 불가",
+                    "supply": "스코어 기반",
+                    "chart": "스코어 기반",
+                },
                 "setupType": ["score_fallback"],
                 "positionFromHigh": 0,
-                "entryZone": {"low": int(cur_price * 0.995), "high": int(cur_price * 1.005)},
+                "entryZone": {
+                    "low": int(cur_price * 0.995),
+                    "high": int(cur_price * 1.005),
+                },
                 "stopLoss": int(cur_price * (1 - stop_pct / 100)),
                 "target1": int(cur_price * 1.02),
                 "target2": int(cur_price * 1.03),
@@ -173,7 +194,9 @@ def _build_score_fallback(top_stock: dict, cur_price: int, phase: str) -> dict:
                 },
                 "score": score,
             },
-        ] if score >= 60 else [],
+        ]
+        if score >= 60
+        else [],
         "riskAnalysis": {
             "failureFactors": "AI 분석 불가 — 뉴스 리스크 미확인",
             "successProbability": min(score, 50),
@@ -195,6 +218,7 @@ def _is_late_session() -> bool:
     hh, mm = map(int, config.LATE_SESSION_START.split(":"))
     return now_kst() >= now_kst().replace(hour=hh, minute=mm, second=0)
 
+
 def _is_early_morning() -> bool:
     """장 초반 모드 (09:00 ~ 09:00+EARLY_MORNING_MINUTES)."""
     now = now_kst()
@@ -205,33 +229,40 @@ def _is_early_morning() -> bool:
 # 모멘텀 스캔 요약 (사이클 메시지에서 참조)
 _last_momentum_scan_summary = ""
 _morning_top_movers: list[dict] = []  # 오전 급등주 추적
-_MOVERS_FILE = os.path.join(os.path.dirname(__file__) or '.', '.morning_top_movers.json')
+_MOVERS_FILE = os.path.join(
+    os.path.dirname(__file__) or ".", ".morning_top_movers.json"
+)
 
 
 def _save_morning_top_movers():
     """오전 급등주 데이터를 파일에 저장 (재시작 복구용)."""
     try:
-        with open(_MOVERS_FILE, 'w') as f:
-            json.dump({'date': now_kst().strftime('%Y-%m-%d'), 'movers': _morning_top_movers}, f, ensure_ascii=False)
+        with open(_MOVERS_FILE, "w") as f:
+            json.dump(
+                {"date": now_kst().strftime("%Y-%m-%d"), "movers": _morning_top_movers},
+                f,
+                ensure_ascii=False,
+            )
     except Exception as e:
-        logger.warning('급등주 저장 실패: %s', e)
+        logger.warning("급등주 저장 실패: %s", e)
 
 
 def _load_morning_top_movers():
     """파일에서 오전 급등주 데이터 복구. 당일 데이터만 로드."""
     global _morning_top_movers
     try:
-        with open(_MOVERS_FILE, 'r') as f:
+        with open(_MOVERS_FILE, "r") as f:
             data = json.load(f)
-        if data.get('date') == now_kst().strftime('%Y-%m-%d'):
-            _morning_top_movers = data.get('movers', [])
-            logger.info('오전 급등주 복구: %d종목', len(_morning_top_movers))
+        if data.get("date") == now_kst().strftime("%Y-%m-%d"):
+            _morning_top_movers = data.get("movers", [])
+            logger.info("오전 급등주 복구: %d종목", len(_morning_top_movers))
         else:
-            logger.info('급등주 데이터 날짜 불일치 — 무시')
+            logger.info("급등주 데이터 날짜 불일치 — 무시")
     except FileNotFoundError:
         pass
     except Exception as e:
-        logger.warning('급등주 복구 실패: %s', e)
+        logger.warning("급등주 복구 실패: %s", e)
+
 
 # --- 불장 모드 (Market Boost) 상태 ---
 _boost_state = {
@@ -258,8 +289,11 @@ def _run_sentiment_check(naver_news, analyzer, bot):
     _boost_state["confidence"] = result.get("confidence", 0)
     # confidence 70 미만이면 neutral 강제 — 저신뢰 판단으로 부스트 방지
     if _boost_state["confidence"] < 70 and _boost_state["sentiment"] != "neutral":
-        logger.info("센티먼트 신뢰도 부족 (%d < 70) — %s → neutral 강제",
-                    _boost_state["confidence"], _boost_state["sentiment"])
+        logger.info(
+            "센티먼트 신뢰도 부족 (%d < 70) — %s → neutral 강제",
+            _boost_state["confidence"],
+            _boost_state["sentiment"],
+        )
         _boost_state["sentiment"] = "neutral"
     summary = result.get("summary", "")
 
@@ -275,8 +309,9 @@ def _run_sentiment_check(naver_news, analyzer, bot):
         f"피해테마: {hurt}\n"
         f"요약: {summary}"
     )
-    logger.info("센티먼트: %s (conf=%d) themes=%s hurt=%s",
-                sentiment, conf, themes, hurt)
+    logger.info(
+        "센티먼트: %s (conf=%d) themes=%s hurt=%s", sentiment, conf, themes, hurt
+    )
 
 
 def _confirm_boost_from_index(market_data: dict, bot):
@@ -290,7 +325,9 @@ def _confirm_boost_from_index(market_data: dict, bot):
     kospi = market_data.get("kospi_index", {})
     kosdaq = market_data.get("kosdaq_index", {})
     kospi_chg = float(kospi.get("change_rate", "0") if isinstance(kospi, dict) else "0")
-    kosdaq_chg = float(kosdaq.get("change_rate", "0") if isinstance(kosdaq, dict) else "0")
+    kosdaq_chg = float(
+        kosdaq.get("change_rate", "0") if isinstance(kosdaq, dict) else "0"
+    )
 
     index_strong = (
         kospi_chg >= config.BOOST_KOSPI_THRESHOLD
@@ -300,13 +337,19 @@ def _confirm_boost_from_index(market_data: dict, bot):
 
     if sentiment == "bullish" and index_strong:
         _boost_state["active"] = True
-        _boost_state["reason"] = f"뉴스 bullish + 지표 강세 (KOSPI {kospi_chg:+.1f}%, KOSDAQ {kosdaq_chg:+.1f}%)"
+        _boost_state["reason"] = (
+            f"뉴스 bullish + 지표 강세 (KOSPI {kospi_chg:+.1f}%, KOSDAQ {kosdaq_chg:+.1f}%)"
+        )
     elif sentiment == "neutral" and index_strong:
         _boost_state["active"] = True
-        _boost_state["reason"] = f"지표 강세 감지 (KOSPI {kospi_chg:+.1f}%, KOSDAQ {kosdaq_chg:+.1f}%) — 돈은 안 거짓말"
+        _boost_state["reason"] = (
+            f"지표 강세 감지 (KOSPI {kospi_chg:+.1f}%, KOSDAQ {kosdaq_chg:+.1f}%) — 돈은 안 거짓말"
+        )
     else:
         _boost_state["active"] = False
-        _boost_state["reason"] = f"평시 유지 (sentiment={sentiment}, KOSPI {kospi_chg:+.1f}%, KOSDAQ {kosdaq_chg:+.1f}%)"
+        _boost_state["reason"] = (
+            f"평시 유지 (sentiment={sentiment}, KOSPI {kospi_chg:+.1f}%, KOSDAQ {kosdaq_chg:+.1f}%)"
+        )
 
     if _boost_state["active"]:
         bot.send_message(
@@ -320,13 +363,17 @@ def _confirm_boost_from_index(market_data: dict, bot):
         )
     else:
         bot.send_message(f"⚖️ 평시 모드 — {_boost_state['reason']}")
-    logger.info("부스트 가부: %s — %s", _boost_state['active'], _boost_state['reason'])
+    logger.info("부스트 가부: %s — %s", _boost_state["active"], _boost_state["reason"])
 
 
 def _try_momentum_entry(
-    kis: KISClient, bot: TelegramBot, db: Database,
-    collector: MarketDataCollector, trader: Trader,
-    monitor: PositionMonitor, sold_codes: set,
+    kis: KISClient,
+    bot: TelegramBot,
+    db: Database,
+    collector: MarketDataCollector,
+    trader: Trader,
+    monitor: PositionMonitor,
+    sold_codes: set,
     market_data: dict,
     consecutive_losses: int = 0,
 ) -> str | None:
@@ -340,36 +387,55 @@ def _try_momentum_entry(
         return None
 
     kosdaq = market_data.get("kosdaq_index", {})
-    kosdaq_change = float(kosdaq.get("change_rate", "0") if isinstance(kosdaq, dict) else "0")
+    kosdaq_change = float(
+        kosdaq.get("change_rate", "0") if isinstance(kosdaq, dict) else "0"
+    )
     _kosdaq_blocked = kosdaq_change <= config.MARKET_INDEX_BLOCK_PCT
     if _kosdaq_blocked:
-        logger.info("KOSDAQ %.1f%% — 시장 하락 감지 (한도 %.1f%%, 고스코어 오버라이드 가능)",
-                    kosdaq_change, config.MARKET_INDEX_BLOCK_PCT)
+        logger.info(
+            "KOSDAQ %.1f%% — 시장 하락 감지 (한도 %.1f%%, 고스코어 오버라이드 가능)",
+            kosdaq_change,
+            config.MARKET_INDEX_BLOCK_PCT,
+        )
 
     late = _is_late_session()
     if late and config.LATE_SESSION_REQUIRE_PROFIT:
         daily_pnl = _get_daily_pnl_pct(monitor)
         if daily_pnl <= 0:
-            logger.info("후반 시간대 + 오전 수익 없음 (%.1f%%) — 모멘텀 스킵", daily_pnl)
+            logger.info(
+                "후반 시간대 + 오전 수익 없음 (%.1f%%) — 모멘텀 스킵", daily_pnl
+            )
             return None
 
+    _could_crash = (
+        config.CRASH_MODE_ENABLED
+        and _kosdaq_blocked
+        and kosdaq_change <= config.CRASH_MODE_THRESHOLD
+    )
     momentum_losses = _count_momentum_losses(monitor)
-    if momentum_losses >= config.MOMENTUM_DAILY_MAX_LOSSES:
-        logger.info("모멘텀 일일 손절한도 도달 (%d/%d) — 모멘텀 스킵",
-                    momentum_losses, config.MOMENTUM_DAILY_MAX_LOSSES)
+    if momentum_losses >= config.MOMENTUM_DAILY_MAX_LOSSES and not _could_crash:
+        logger.info(
+            "모멘텀 일일 손절한도 도달 (%d/%d) — 모멘텀 스킵",
+            momentum_losses,
+            config.MOMENTUM_DAILY_MAX_LOSSES,
+        )
         return None
-
 
     # --- 일일 거래 횟수 제한 (수수료 상한 고정) ---
     total_trades = len(monitor.trades_today)
     if total_trades >= config.MAX_DAILY_TRADES:
-        logger.info("일일 거래한도 도달 (%d/%d) — 오늘 더 이상 거래 안 함",
-                    total_trades, config.MAX_DAILY_TRADES)
+        logger.info(
+            "일일 거래한도 도달 (%d/%d) — 오늘 더 이상 거래 안 함",
+            total_trades,
+            config.MAX_DAILY_TRADES,
+        )
         return None
 
     logger.info("Phase 2M — 모멘텀 후보 소싱")
     try:
-        momentum_stocks = collector.enrich_momentum_candidates(market_data.get("stock_news", {}))
+        momentum_stocks = collector.enrich_momentum_candidates(
+            market_data.get("stock_news", {})
+        )
     except Exception as e:
         logger.warning("모멘텀 소싱 실패: %s", e)
         return None
@@ -381,29 +447,46 @@ def _try_momentum_entry(
         s_change = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
         s_high = int(str(s.get("stck_hgpr", 0)).replace(",", "") or 0)
         s_cur = int(str(s.get("stck_prpr", 0)).replace(",", "") or 0)
-        s_prev_close = int(s_cur / (1 + s_change / 100)) if s_change > 0 and s_cur > 0 else 0
+        s_prev_close = (
+            int(s_cur / (1 + s_change / 100)) if s_change > 0 and s_cur > 0 else 0
+        )
         if s_change >= config.PULLBACK_MIN_MORNING_CHANGE:
-            existing = next((m for m in _morning_top_movers if m["code"] == s_code), None)
+            existing = next(
+                (m for m in _morning_top_movers if m["code"] == s_code), None
+            )
             if existing:
                 if s_high > existing["morning_high"]:
                     existing["morning_high"] = s_high
                     existing["morning_high_pct"] = s_change
             else:
-                _morning_top_movers.append({
-                    "code": s_code,
-                    "name": s.get("hts_kor_isnm", "?"),
-                    "morning_high": s_high,
-                    "morning_high_pct": s_change,
-                    "prev_close": s_prev_close,
-                })
+                _morning_top_movers.append(
+                    {
+                        "code": s_code,
+                        "name": s.get("hts_kor_isnm", "?"),
+                        "morning_high": s_high,
+                        "morning_high_pct": s_change,
+                        "prev_close": s_prev_close,
+                    }
+                )
 
     if _morning_top_movers:
         _save_morning_top_movers()
     if not momentum_stocks:
-        _last_momentum_scan_summary = getattr(collector, 'last_scan_summary', '후보 없음')
-        return None
-
-    top = momentum_stocks[0]
+        if not _could_crash:
+            _last_momentum_scan_summary = getattr(
+                collector, "last_scan_summary", "후보 없음"
+            )
+            return None
+        logger.info("모멘텀 후보 없음 — 크래시 인버스 모드로 전환")
+        code, name, change_pct, m_score = "", "크래시대기", 0.0, 0
+        top = {
+            "mksc_shrn_iscd": "",
+            "hts_kor_isnm": "크래시대기",
+            "prdy_ctrt": "0",
+            "momentum_score": 0,
+        }
+    else:
+        top = momentum_stocks[0]
     code = top.get("mksc_shrn_iscd", "")
     name = top.get("hts_kor_isnm", "?")
     change_pct = float(str(top.get("prdy_ctrt", "0")).replace(",", "") or "0")
@@ -422,27 +505,74 @@ def _try_momentum_entry(
     # 손절 후 다음 진입: 최소 스코어 강화
     if consecutive_losses > 0:
         min_score = max(min_score, config.AFTER_LOSS_MIN_SCORE)
-        logger.info("손절 후 안전 모드: 최소 스코어 %d 적용 (%d연패)", min_score, consecutive_losses)
-    if m_score < min_score:
-        logger.info("모멘텀 1위 스코어 부족: %s (%.1f, 최소 %d) — 스킵",
-                    name, m_score, min_score)
-        scan_info = getattr(collector, 'last_scan_summary', '')
+        logger.info(
+            "손절 후 안전 모드: 최소 스코어 %d 적용 (%d연패)",
+            min_score,
+            consecutive_losses,
+        )
+    if m_score < min_score and not _could_crash:
+        logger.info(
+            "모멘텀 1위 스코어 부족: %s (%.1f, 최소 %d) — 스킵",
+            name,
+            m_score,
+            min_score,
+        )
+        scan_info = getattr(collector, "last_scan_summary", "")
         score_msg = f"1위 {name} 스코어 {m_score:.1f} < 최소 {min_score}"
-        _last_momentum_scan_summary = f"{score_msg}\n{scan_info}" if scan_info else score_msg
+        _last_momentum_scan_summary = (
+            f"{score_msg}\n{scan_info}" if scan_info else score_msg
+        )
         return None
 
     # KOSDAQ 하락 차단: 스코어가 오버라이드 기준 이상이면 진입 허용
+    _crash_mode = False
     if _kosdaq_blocked:
         if m_score >= config.MARKET_INDEX_OVERRIDE_SCORE:
-            logger.info("KOSDAQ %.1f%% 하락이지만 스코어 %.1f ≥ %d — 차단 오버라이드",
-                        kosdaq_change, m_score, config.MARKET_INDEX_OVERRIDE_SCORE)
+            logger.info(
+                "KOSDAQ %.1f%% 하락이지만 스코어 %.1f ≥ %d — 차단 오버라이드",
+                kosdaq_change,
+                m_score,
+                config.MARKET_INDEX_OVERRIDE_SCORE,
+            )
             bot.send_message(
                 f"⚡ KOSDAQ {kosdaq_change:+.1f}% 하락이지만\n"
                 f"{name} 스코어 {m_score:.1f} ≥ {config.MARKET_INDEX_OVERRIDE_SCORE} — 진입 허용"
             )
+        elif config.CRASH_MODE_ENABLED and kosdaq_change <= config.CRASH_MODE_THRESHOLD:
+            logger.info(
+                "KOSDAQ %.1f%% — 크래시 모드 진입 (임계값 %.1f%%)",
+                kosdaq_change,
+                config.CRASH_MODE_THRESHOLD,
+            )
+            try:
+                crash_candidates = collector.fetch_crash_inverse_candidates()
+            except Exception as e:
+                logger.warning("크래시 인버스 소싱 실패: %s", e)
+                crash_candidates = []
+            if crash_candidates:
+                top = crash_candidates[0]
+                code = top["mksc_shrn_iscd"]
+                name = top["hts_kor_isnm"]
+                change_pct = float(top.get("prdy_ctrt", 0))
+                m_score = top.get("momentum_score", 0)
+                _crash_mode = True
+                bot.send_message(
+                    f"📉 <b>크래시 모드 — 인버스 진입</b>\n\n"
+                    f"KOSDAQ {kosdaq_change:+.1f}%\n"
+                    f"{name} ({code})\n"
+                    f"등락률: {change_pct:+.1f}%\n"
+                    f"스코어: {m_score:.1f}"
+                )
+            else:
+                logger.info("크래시 모드 — 인버스 후보 없음")
+                return None
         else:
-            logger.info("KOSDAQ %.1f%% + 스코어 %.1f < %d — 모멘텀 차단",
-                        kosdaq_change, m_score, config.MARKET_INDEX_OVERRIDE_SCORE)
+            logger.info(
+                "KOSDAQ %.1f%% + 스코어 %.1f < %d — 모멘텀 차단",
+                kosdaq_change,
+                m_score,
+                config.MARKET_INDEX_OVERRIDE_SCORE,
+            )
             bot.send_message(
                 f"🛑 KOSDAQ {kosdaq_change:+.1f}% 하락 + "
                 f"{name} 스코어 {m_score:.1f} ≤ {config.MARKET_INDEX_OVERRIDE_SCORE} — 진입 차단"
@@ -450,12 +580,18 @@ def _try_momentum_entry(
             return None
 
     # --- 고스코어 즉시 진입: 풀백 패턴 없이도 진입 허용 ---
-    skip_pullback = False
+    skip_pullback = _crash_mode
+    if _crash_mode:
+        logger.info("크래시 모드 즉시 진입: %s — 풀백 스킵", name)
     # 1) 스코어가 충분히 높으면 시간대 무관하게 풀백 생략 (네오티스 75.8 사례)
-    if m_score >= config.MOMENTUM_SKIP_PULLBACK_SCORE:
+    elif m_score >= config.MOMENTUM_SKIP_PULLBACK_SCORE:
         skip_pullback = True
-        logger.info("고스코어 즉시 진입: %s (스코어 %.1f ≥ %d) — 풀백 스킵",
-                    name, m_score, config.MOMENTUM_SKIP_PULLBACK_SCORE)
+        logger.info(
+            "고스코어 즉시 진입: %s (스코어 %.1f ≥ %d) — 풀백 스킵",
+            name,
+            m_score,
+            config.MOMENTUM_SKIP_PULLBACK_SCORE,
+        )
     # 2) 초반 모드: 낮은 스코어도 고점 근처면 풀백 생략
     elif early and m_score >= config.EARLY_SKIP_PULLBACK_SCORE:
         high_ratio = top.get("_high_ratio", 0)
@@ -465,12 +601,20 @@ def _try_momentum_entry(
             high_ratio = cur / today_high if today_high > 0 else 0
         if high_ratio >= config.EARLY_SKIP_PULLBACK_HIGH_RATIO:
             skip_pullback = True
-            logger.info("초반 모드 즉시 진입: %s (스코어 %.1f, 고점비 %.1f%%) — 풀백 스킵",
-                        name, m_score, high_ratio * 100)
+            logger.info(
+                "초반 모드 즉시 진입: %s (스코어 %.1f, 고점비 %.1f%%) — 풀백 스킵",
+                name,
+                m_score,
+                high_ratio * 100,
+            )
 
-    logger.info("모멘텀 1위: %s (%.1f%%, 스코어 %.1f) — %s",
-                name, change_pct, m_score,
-                "즉시 진입" if skip_pullback else "풀백 진입 확인")
+    logger.info(
+        "모멘텀 1위: %s (%.1f%%, 스코어 %.1f) — %s",
+        name,
+        change_pct,
+        m_score,
+        "즉시 진입" if skip_pullback else "풀백 진입 확인",
+    )
     bot.send_message(
         f"🚀 <b>모멘텀 후보 발견</b>\n\n"
         f"{name} ({code})\n"
@@ -490,7 +634,9 @@ def _try_momentum_entry(
         price_data = kis.get_current_price(code)
         cur_price = price_data["price"]
         now = now_kst()
-        today_open = price_data.get("open", 0) if (now.hour == 9 and now.minute < 30) else 0
+        today_open = (
+            price_data.get("open", 0) if (now.hour == 9 and now.minute < 30) else 0
+        )
         today_high = price_data.get("high", 0)
     except Exception as e:
         logger.warning("모멘텀 현재가 조회 실패: %s", e)
@@ -502,6 +648,7 @@ def _try_momentum_entry(
     # --- 진입 품질 판정 (비대칭 R:R) ---
     try:
         from market_data import assess_entry_quality
+
         # enriched 데이터에서 5분봉, 수급 데이터 추출
         candles_5m = top.get("minute_candles_5m", [])
         foreign_data = top.get("foreign_institution", [])
@@ -510,8 +657,13 @@ def _try_momentum_entry(
         eq_stop_pct = eq_result["stop_loss_pct"]
         eq_position_scale = eq_result["position_scale"]
         eq_details = eq_result["details"]
-        logger.info("진입 품질: %s — %s (손절 -%.1f%%, 포지션 %.0f%%)",
-                    entry_quality, eq_details, eq_stop_pct, eq_position_scale * 100)
+        logger.info(
+            "진입 품질: %s — %s (손절 -%.1f%%, 포지션 %.0f%%)",
+            entry_quality,
+            eq_details,
+            eq_stop_pct,
+            eq_position_scale * 100,
+        )
     except Exception as e:
         logger.warning("진입 품질 판정 실패: %s — standard 적용", e)
         entry_quality = "standard"
@@ -538,8 +690,11 @@ def _try_momentum_entry(
         logger.info("모멘텀 주문 가능 수량 0주 — 스킵")
         return None
 
-    # 비대칭 R:R: entry_quality 기반 타이트 손절
-    stop_pct = eq_stop_pct
+    # 크래시 모드: 전용 손절 / 일반: 비대칭 R:R 기반
+    if _crash_mode:
+        stop_pct = config.CRASH_STOP_LOSS_PCT
+    else:
+        stop_pct = eq_stop_pct
     stop_loss = int(cur_price * (1 - stop_pct / 100))
 
     # 모멘텀: 상한 지정가 (현재가 + 1% 버퍼) — 빠른 체결 + 슬리피지 제한
@@ -555,91 +710,98 @@ def _try_momentum_entry(
         "price": order_price,
         "quantity": quantity,
         "amount": quantity * order_price,
-        "reason": f"모멘텀 진입 ({change_pct:+.1f}%, 스코어 {m_score:.1f})",
+        "reason": f"{'크래시 인버스' if _crash_mode else '모멘텀'} 진입 ({change_pct:+.1f}%, 스코어 {m_score:.1f})",
         "target1": int(cur_price * 1.05),
         "target2": int(cur_price * 1.10),
         "stop_loss": stop_loss,
         "score": int(m_score),
-        "sell_strategy": {"breakoutHold": "모멘텀 트레일링", "breakoutFail": "갭실패 즉시청산"},
+        "sell_strategy": {
+            "breakoutHold": "모멘텀 트레일링",
+            "breakoutFail": "갭실패 즉시청산",
+        },
         "is_momentum": True,
     }
 
     # 매수 이유 구체화 — 숫자를 해석해서 사람이 납득할 수 있게
-    high_ratio = top.get('_high_ratio', 0)
+    high_ratio = top.get("_high_ratio", 0)
     if high_ratio == 0:
-        th = int(str(top.get('stck_hgpr', 0)).replace(',', '') or 0)
+        th = int(str(top.get("stck_hgpr", 0)).replace(",", "") or 0)
         high_ratio = cur_price / th if th > 0 else 0
-    vol_ratio = top.get('_vol_ratio', 0)
-    theme_label = top.get('_theme_label', '')
+    vol_ratio = top.get("_vol_ratio", 0)
+    theme_label = top.get("_theme_label", "")
 
     # 거래량 해석
     if vol_ratio >= 10:
-        vol_reason = f'거래량 {vol_ratio:.0f}배 폭증 — 세력/기관 유입 의심'
+        vol_reason = f"거래량 {vol_ratio:.0f}배 폭증 — 세력/기관 유입 의심"
     elif vol_ratio >= 5:
-        vol_reason = f'거래량 {vol_ratio:.1f}배 폭증 — 강한 매수세 유입'
+        vol_reason = f"거래량 {vol_ratio:.1f}배 폭증 — 강한 매수세 유입"
     elif vol_ratio >= 3:
-        vol_reason = f'거래량 {vol_ratio:.1f}배 급증 — 시장 관심 집중'
+        vol_reason = f"거래량 {vol_ratio:.1f}배 급증 — 시장 관심 집중"
     elif vol_ratio >= 2:
-        vol_reason = f'거래량 {vol_ratio:.1f}배 증가 — 평소 대비 활발'
+        vol_reason = f"거래량 {vol_ratio:.1f}배 증가 — 평소 대비 활발"
     else:
-        vol_reason = f'거래량 {vol_ratio:.1f}배 — 보통 수준'
+        vol_reason = f"거래량 {vol_ratio:.1f}배 — 보통 수준"
 
     # 고점비 해석
     hr_pct = high_ratio * 100
     if hr_pct >= 98:
-        hr_reason = f'고점 대비 {hr_pct:.1f}% — 매도 압력 약함 (강세)'
+        hr_reason = f"고점 대비 {hr_pct:.1f}% — 매도 압력 약함 (강세)"
     elif hr_pct >= 95:
-        hr_reason = f'고점 대비 {hr_pct:.1f}% — 상승 모멘텀 유지'
+        hr_reason = f"고점 대비 {hr_pct:.1f}% — 상승 모멘텀 유지"
     elif hr_pct >= 90:
-        hr_reason = f'고점 대비 {hr_pct:.1f}% — 소폭 조정 중'
+        hr_reason = f"고점 대비 {hr_pct:.1f}% — 소폭 조정 중"
     else:
-        hr_reason = f'고점 대비 {hr_pct:.1f}% — 조정 진행 중'
+        hr_reason = f"고점 대비 {hr_pct:.1f}% — 조정 진행 중"
 
     # 스코어 해석
     if m_score >= 60:
-        score_reason = f'스코어 {m_score:.0f}점 (1위) — 매우 강한 모멘텀'
+        score_reason = f"스코어 {m_score:.0f}점 (1위) — 매우 강한 모멘텀"
     elif m_score >= 40:
-        score_reason = f'스코어 {m_score:.0f}점 (1위) — 강한 모멘텀'
+        score_reason = f"스코어 {m_score:.0f}점 (1위) — 강한 모멘텀"
     else:
-        score_reason = f'스코어 {m_score:.0f}점 (1위) — 진입 기준 충족'
+        score_reason = f"스코어 {m_score:.0f}점 (1위) — 진입 기준 충족"
 
     # 진입 모드 해석
     if early and skip_pullback:
-        mode_reason = '장 초반 고점유지 — 풀백 없이 즉시 진입'
+        mode_reason = "장 초반 고점유지 — 풀백 없이 즉시 진입"
     elif skip_pullback and m_score >= config.MOMENTUM_SKIP_PULLBACK_SCORE:
-        mode_reason = f'고스코어({m_score:.0f}) 즉시 진입 — 풀백 불필요'
+        mode_reason = f"고스코어({m_score:.0f}) 즉시 진입 — 풀백 불필요"
     elif boosted:
-        mode_reason = '불장 모드 — 테마 수혜 공격적 진입'
+        mode_reason = "불장 모드 — 테마 수혜 공격적 진입"
     elif late:
-        mode_reason = '후반 세션 — 보수적 배팅'
+        mode_reason = "후반 세션 — 보수적 배팅"
     else:
-        mode_reason = '풀백 확인 후 진입'
+        mode_reason = "풀백 확인 후 진입"
 
     # 진입 품질 해석
-    eq_emoji = "🏆" if entry_quality == "premium" else ("✅" if entry_quality == "standard" else "⚠️")
+    eq_emoji = (
+        "🏆"
+        if entry_quality == "premium"
+        else ("✅" if entry_quality == "standard" else "⚠️")
+    )
 
     reasons = [
-        f'\U0001f680 <b>모멘텀 매수 진행</b>\n',
-        f'{name} ({code}) {change_pct:+.1f}%',
-        f'',
-        f'\U0001f4ca <b>매수 이유</b>',
-        f'• {vol_reason}',
-        f'• {hr_reason}',
-        f'• {score_reason}',
-        f'• {mode_reason}',
-        f'• {eq_emoji} 진입 품질: {entry_quality.upper()} ({eq_details})',
-        f'• 포지션: {eq_position_scale*100:.0f}% | 손절: -{eq_stop_pct}%',
+        f"\U0001f680 <b>모멘텀 매수 진행</b>\n",
+        f"{name} ({code}) {change_pct:+.1f}%",
+        f"",
+        f"\U0001f4ca <b>매수 이유</b>",
+        f"• {vol_reason}",
+        f"• {hr_reason}",
+        f"• {score_reason}",
+        f"• {mode_reason}",
+        f"• {eq_emoji} 진입 품질: {entry_quality.upper()} ({eq_details})",
+        f"• 포지션: {eq_position_scale * 100:.0f}% | 손절: -{eq_stop_pct}%",
     ]
     if theme_label:
-        reasons.append(f'• 테마: {theme_label}')
+        reasons.append(f"• 테마: {theme_label}")
     reasons += [
-        f'',
-        f'\U0001f4b0 <b>주문</b>',
-        f'{quantity}주 × {order_price:,}원 (상한지정가)',
-        f'투입: {quantity * order_price:,}원 (자본 {pos_pct}%)',
-        f'손절: {stop_loss:,}원 (-{stop_pct}%)',
+        f"",
+        f"\U0001f4b0 <b>주문</b>",
+        f"{quantity}주 × {order_price:,}원 (상한지정가)",
+        f"투입: {quantity * order_price:,}원 (자본 {pos_pct}%)",
+        f"손절: {stop_loss:,}원 (-{stop_pct}%)",
     ]
-    bot.send_message('\n'.join(reasons))
+    bot.send_message("\n".join(reasons))
 
     results = trader.execute_buy_orders([order])
     success = [r for r in results if r["success"]]
@@ -660,10 +822,14 @@ def _try_momentum_entry(
     if fills:
         f = fills[0]
         fill_price = f["price"]
-        buy_slippage = (fill_price - cur_price) / cur_price * 100 if cur_price > 0 else 0
-        adjusted_stop = int(fill_price * (1 - eq_stop_pct / 100))
+        buy_slippage = (
+            (fill_price - cur_price) / cur_price * 100 if cur_price > 0 else 0
+        )
+        adjusted_stop = int(fill_price * (1 - stop_pct / 100))
 
-        bot.send_fill_confirmation(fills, strategy='momentum')
+        bot.send_fill_confirmation(
+            fills, strategy="crash_inverse" if _crash_mode else "momentum"
+        )
         monitor.add_position(
             stock_code=f["stock_code"],
             name=f["name"],
@@ -675,16 +841,22 @@ def _try_momentum_entry(
             sell_strategy=order["sell_strategy"],
             buy_slippage_pct=buy_slippage,
             score=order["score"],
-            phase="momentum",
+            phase="crash_inverse" if _crash_mode else "momentum",
             is_momentum=True,
             today_open=today_open,
             entry_quality=entry_quality,
         )
+        if _crash_mode:
+            monitor.positions[f["stock_code"]]["is_crash_inverse"] = True
+            monitor._save_positions()
 
         if not config.DRY_RUN and db:
             db.save_trade(
-                stock_code=f["stock_code"], stock_name=f["name"],
-                action="buy", quantity=f["quantity"], price=fill_price,
+                stock_code=f["stock_code"],
+                stock_name=f["name"],
+                action="buy",
+                quantity=f["quantity"],
+                price=fill_price,
                 reason=order["reason"],
             )
 
@@ -702,9 +874,13 @@ def _try_momentum_entry(
 
     return None
 
+
 def _try_pullback_entry(
-    kis: KISClient, bot: TelegramBot, db: Database,
-    trader: Trader, monitor: PositionMonitor,
+    kis: KISClient,
+    bot: TelegramBot,
+    db: Database,
+    trader: Trader,
+    monitor: PositionMonitor,
     sold_codes: set,
 ) -> str | None:
     """오후 눌림목 반등 진입."""
@@ -756,7 +932,9 @@ def _try_pullback_entry(
         # 전일 대비 아직 플러스인지
         change_pct = (current - prev_close) / prev_close * 100
         if change_pct <= 0:
-            logger.info("눌림목 제외 [전일 대비 마이너스]: %s (%.1f%%)", name, change_pct)
+            logger.info(
+                "눌림목 제외 [전일 대비 마이너스]: %s (%.1f%%)", name, change_pct
+            )
             continue
 
         # 반등 확인
@@ -766,12 +944,17 @@ def _try_pullback_entry(
                 logger.info("눌림목 제외 [반등 미확인 %.1f%%]: %s", bounce, name)
                 continue
 
-        logger.info("눌림목 진입 대상: %s (되돌림 %.0f%%, 현재 %s)",
-                    name, retracement * 100, f"{current:,}")
+        logger.info(
+            "눌림목 진입 대상: %s (되돌림 %.0f%%, 현재 %s)",
+            name,
+            retracement * 100,
+            f"{current:,}",
+        )
 
         # --- 진입 품질 판정 (비대칭 R:R) ---
         try:
             from market_data import assess_entry_quality
+
             candles_5m = []  # 눌림목은 별도 5분봉 없음
             foreign_data = []
             eq_result = assess_entry_quality(code, kis, candles_5m, foreign_data)
@@ -779,13 +962,20 @@ def _try_pullback_entry(
             pb_eq_stop_pct = eq_result["stop_loss_pct"]
             pb_eq_position_scale = eq_result["position_scale"]
             pb_eq_details = eq_result["details"]
-            logger.info("눌림목 진입 품질: %s — %s (손절 -%.1f%%, 포지션 %.0f%%)",
-                        pb_entry_quality, pb_eq_details, pb_eq_stop_pct, pb_eq_position_scale * 100)
+            logger.info(
+                "눌림목 진입 품질: %s — %s (손절 -%.1f%%, 포지션 %.0f%%)",
+                pb_entry_quality,
+                pb_eq_details,
+                pb_eq_stop_pct,
+                pb_eq_position_scale * 100,
+            )
         except Exception as e:
             logger.warning("눌림목 진입 품질 판정 실패: %s — standard 적용", e)
             pb_entry_quality = "standard"
             pb_eq_stop_pct = config.TIGHT_STOP_LOSS_PCT
-            pb_eq_position_scale = config.ENTRY_QUALITY_POSITION_SCALE.get("standard", 0.7)
+            pb_eq_position_scale = config.ENTRY_QUALITY_POSITION_SCALE.get(
+                "standard", 0.7
+            )
             pb_eq_details = "판정 실패 (standard 기본)"
 
         try:
@@ -795,7 +985,12 @@ def _try_pullback_entry(
             continue
 
         # 비대칭 R:R: entry_quality에 따라 포지션 스케일링
-        position_cash = int(available_cash * config.AFTERNOON_MAX_POSITION_PCT / 100 * pb_eq_position_scale)
+        position_cash = int(
+            available_cash
+            * config.AFTERNOON_MAX_POSITION_PCT
+            / 100
+            * pb_eq_position_scale
+        )
         order_price = round_to_tick(int(current * 1.005))
         quantity = position_cash // order_price
         if quantity <= 0:
@@ -812,53 +1007,62 @@ def _try_pullback_entry(
         # 되돌림 해석
         ret_pct = retracement * 100
         if ret_pct >= 55:
-            ret_reason = f'되돌림 {ret_pct:.0f}% — 충분히 눈림, 바닥 근처'
+            ret_reason = f"되돌림 {ret_pct:.0f}% — 충분히 눈림, 바닥 근처"
         elif ret_pct >= 40:
-            ret_reason = f'되돌림 {ret_pct:.0f}% — 적정 조정 구간'
+            ret_reason = f"되돌림 {ret_pct:.0f}% — 적정 조정 구간"
         else:
-            ret_reason = f'되돌림 {ret_pct:.0f}% — 초기 조정 구간'
+            ret_reason = f"되돌림 {ret_pct:.0f}% — 초기 조정 구간"
 
         # 반등 해석
         if bounce_pct >= 2.0:
-            bounce_reason = f'저점 대비 +{bounce_pct:.1f}% 반등 — 강한 바닥 신호'
+            bounce_reason = f"저점 대비 +{bounce_pct:.1f}% 반등 — 강한 바닥 신호"
         elif bounce_pct >= 1.0:
-            bounce_reason = f'저점 대비 +{bounce_pct:.1f}% 반등 — 바닥 다진 신호'
+            bounce_reason = f"저점 대비 +{bounce_pct:.1f}% 반등 — 바닥 다진 신호"
         else:
-            bounce_reason = f'저점 대비 +{bounce_pct:.1f}% 반등 — 초기 반등'
+            bounce_reason = f"저점 대비 +{bounce_pct:.1f}% 반등 — 초기 반등"
 
         # 진입 품질 해석
-        pb_eq_emoji = "🏆" if pb_entry_quality == "premium" else ("✅" if pb_entry_quality == "standard" else "⚠️")
+        pb_eq_emoji = (
+            "🏆"
+            if pb_entry_quality == "premium"
+            else ("✅" if pb_entry_quality == "standard" else "⚠️")
+        )
 
         reasons = [
-            f'\U0001f4c9 <b>눌림목 반등 매수</b>\n',
-            f'{name} ({code}) 현재 {change_pct:+.1f}%',
-            f'',
-            f'\U0001f4ca <b>매수 이유</b>',
-            f'• 오전 +{mover["morning_high_pct"]:.1f}% 급등 후 조정 — 매수 기회',
-            f'• {ret_reason}',
-            f'• {bounce_reason}',
-            f'• 전일대비 +{change_pct:.1f}% 유지 — 상승 추세 유효',
-            f'• {candidate_count}개 급등주 중 최적 진입점',
-            f'• {pb_eq_emoji} 진입 품질: {pb_entry_quality.upper()} ({pb_eq_details})',
-            f'• 포지션: {pb_eq_position_scale*100:.0f}% | 손절: -{pb_eq_stop_pct}%',
-            f'',
-            f'\U0001f4b0 <b>주문</b>',
-            f'{quantity}주 × {order_price:,}원',
-            f'목표: {target:,}원 (+{config.PULLBACK_TARGET_PCT}%)',
-            f'손절: {stop_loss:,}원 (-{pb_eq_stop_pct}%)',
+            f"\U0001f4c9 <b>눌림목 반등 매수</b>\n",
+            f"{name} ({code}) 현재 {change_pct:+.1f}%",
+            f"",
+            f"\U0001f4ca <b>매수 이유</b>",
+            f"• 오전 +{mover['morning_high_pct']:.1f}% 급등 후 조정 — 매수 기회",
+            f"• {ret_reason}",
+            f"• {bounce_reason}",
+            f"• 전일대비 +{change_pct:.1f}% 유지 — 상승 추세 유효",
+            f"• {candidate_count}개 급등주 중 최적 진입점",
+            f"• {pb_eq_emoji} 진입 품질: {pb_entry_quality.upper()} ({pb_eq_details})",
+            f"• 포지션: {pb_eq_position_scale * 100:.0f}% | 손절: -{pb_eq_stop_pct}%",
+            f"",
+            f"\U0001f4b0 <b>주문</b>",
+            f"{quantity}주 × {order_price:,}원",
+            f"목표: {target:,}원 (+{config.PULLBACK_TARGET_PCT}%)",
+            f"손절: {stop_loss:,}원 (-{pb_eq_stop_pct}%)",
         ]
-        bot.send_message('\n'.join(reasons))
+        bot.send_message("\n".join(reasons))
 
         order = {
-            "stock_code": code, "name": name,
-            "price": order_price, "quantity": quantity,
+            "stock_code": code,
+            "name": name,
+            "price": order_price,
+            "quantity": quantity,
             "amount": quantity * order_price,
             "reason": f"눌림목 반등 (되돌림 {retracement * 100:.0f}%)",
             "target1": target,
             "target2": int(current * 1.05),
             "stop_loss": stop_loss,
             "score": 0,
-            "sell_strategy": {"type": "pullback", "target_pct": config.PULLBACK_TARGET_PCT},
+            "sell_strategy": {
+                "type": "pullback",
+                "target_pct": config.PULLBACK_TARGET_PCT,
+            },
             "is_momentum": False,
         }
 
@@ -883,20 +1087,33 @@ def _try_pullback_entry(
             fill_price = f["price"]
             slippage = (fill_price - current) / current * 100 if current > 0 else 0
             monitor.add_position(
-                stock_code=f["stock_code"], name=f["name"],
-                quantity=f["quantity"], entry_price=fill_price,
+                stock_code=f["stock_code"],
+                name=f["name"],
+                quantity=f["quantity"],
+                entry_price=fill_price,
                 target1=int(fill_price * (1 + config.PULLBACK_TARGET_PCT / 100)),
                 target2=int(fill_price * 1.05),
                 stop_loss=int(fill_price * (1 - pb_eq_stop_pct / 100)),
-                sell_strategy={"type": "pullback", "target_pct": config.PULLBACK_TARGET_PCT},
-                buy_slippage_pct=slippage, score=0, phase="pullback", is_momentum=False,
+                sell_strategy={
+                    "type": "pullback",
+                    "target_pct": config.PULLBACK_TARGET_PCT,
+                },
+                buy_slippage_pct=slippage,
+                score=0,
+                phase="pullback",
+                is_momentum=False,
                 entry_quality=pb_entry_quality,
             )
-            bot.send_fill_confirmation(fills, strategy='pullback')
+            bot.send_fill_confirmation(fills, strategy="pullback")
             if not config.DRY_RUN and db:
-                db.save_trade(stock_code=f["stock_code"], stock_name=f["name"],
-                    action="buy", quantity=f["quantity"], price=fill_price,
-                    reason=order["reason"])
+                db.save_trade(
+                    stock_code=f["stock_code"],
+                    stock_name=f["name"],
+                    action="buy",
+                    quantity=f["quantity"],
+                    price=fill_price,
+                    reason=order["reason"],
+                )
             return "pullback_entered"
 
         if not config.DRY_RUN:
@@ -910,8 +1127,13 @@ def _try_pullback_entry(
 
     return None
 
+
 def _past_entry_cutoff() -> bool:
-    cutoff = config.BOOST_NO_NEW_ENTRY_AFTER if _boost_state["active"] else config.NO_NEW_ENTRY_AFTER
+    cutoff = (
+        config.BOOST_NO_NEW_ENTRY_AFTER
+        if _boost_state["active"]
+        else config.NO_NEW_ENTRY_AFTER
+    )
     hh, mm = map(int, cutoff.split(":"))
     n = now_kst()
     return n.hour > hh or (n.hour == hh and n.minute >= mm)
@@ -944,9 +1166,14 @@ def _should_run_afternoon(monitor: PositionMonitor) -> bool:
 
 
 def _try_reinvest(
-    kis: KISClient, bot: TelegramBot, collector: MarketDataCollector,
-    analyzer: AIAnalyzer, trader: Trader, monitor: PositionMonitor,
-    sold_codes: set, phase: str = "morning",
+    kis: KISClient,
+    bot: TelegramBot,
+    collector: MarketDataCollector,
+    analyzer: AIAnalyzer,
+    trader: Trader,
+    monitor: PositionMonitor,
+    sold_codes: set,
+    phase: str = "morning",
 ) -> None:
     cutoff_fn = _past_afternoon_cutoff if phase == "afternoon" else _past_entry_cutoff
     if cutoff_fn():
@@ -966,7 +1193,9 @@ def _try_reinvest(
     try:
         mdata = collector.fetch_market_data(phase=phase)
         enr = collector.enrich_stocks(
-            mdata["volume_ranking"], mdata["stock_news"], mdata["is_market_open"],
+            mdata["volume_ranking"],
+            mdata["stock_news"],
+            mdata["is_market_open"],
             phase=phase,
         )
         if not enr:
@@ -977,9 +1206,12 @@ def _try_reinvest(
             for c, p in monitor.positions.items()
         ]
         anal = analyzer.analyze(
-            enriched_stocks=enr, up_ranking=mdata["up_ranking"],
-            down_ranking=mdata["down_ranking"], kospi_index=mdata["kospi_index"],
-            kosdaq_index=mdata["kosdaq_index"], exchange_rate=mdata["exchange_rate"],
+            enriched_stocks=enr,
+            up_ranking=mdata["up_ranking"],
+            down_ranking=mdata["down_ranking"],
+            kospi_index=mdata["kospi_index"],
+            kosdaq_index=mdata["kosdaq_index"],
+            exchange_rate=mdata["exchange_rate"],
             is_market_open=mdata["is_market_open"],
             current_positions=reinvest_pos or None,
         )
@@ -1023,12 +1255,17 @@ def _try_reinvest(
                 mo = new_map.get(nf["stock_code"])
                 if mo:
                     adjusted_stop = _recalc_stop_loss(
-                        nf["price"], mo["price"], mo["stop_loss"],
+                        nf["price"],
+                        mo["price"],
+                        mo["stop_loss"],
                     )
                     monitor.add_position(
-                        stock_code=nf["stock_code"], name=nf["name"],
-                        quantity=nf["quantity"], entry_price=nf["price"],
-                        target1=mo["target1"], target2=mo["target2"],
+                        stock_code=nf["stock_code"],
+                        name=nf["name"],
+                        quantity=nf["quantity"],
+                        entry_price=nf["price"],
+                        target1=mo["target1"],
+                        target2=mo["target2"],
                         stop_loss=adjusted_stop,
                         sell_strategy=mo.get("sell_strategy"),
                         entry_quality="standard",
@@ -1089,7 +1326,11 @@ def run_daily_cycle():
     naver_fin = NaverFinanceService()
     naver_news = NaverNewsService()
     collector = MarketDataCollector(kis, naver_fin, naver_news)
-    ai_key = config.ANTHROPIC_API_KEY if config.AI_PROVIDER == "anthropic" else config.OPENAI_API_KEY
+    ai_key = (
+        config.ANTHROPIC_API_KEY
+        if config.AI_PROVIDER == "anthropic"
+        else config.OPENAI_API_KEY
+    )
     analyzer = AIAnalyzer(ai_key, provider=config.AI_PROVIDER)
     trader = Trader(kis, bot, db)
     monitor = PositionMonitor(kis, bot, db)
@@ -1103,7 +1344,9 @@ def run_daily_cycle():
         if sync_result["added"] or sync_result["removed"] or sync_result.get("updated"):
             lines = ["🔄 <b>포지션 동기화 완료</b>"]
             for h in sync_result["added"]:
-                lines.append(f"  ➕ {h['name']} {h['quantity']}주 @ {h['avg_price']:,}원")
+                lines.append(
+                    f"  ➕ {h['name']} {h['quantity']}주 @ {h['avg_price']:,}원"
+                )
             for name in sync_result["removed"]:
                 lines.append(f"  ➖ {name} (청산됨)")
             for u in sync_result.get("updated", []):
@@ -1118,7 +1361,9 @@ def run_daily_cycle():
         return bot
 
     mode_label = " [모의투자]" if config.DRY_RUN else ""
-    bot.send_message(f"🔔 Day Trader 시작{mode_label} ({now_kst().strftime('%Y.%m.%d %H:%M')})")
+    bot.send_message(
+        f"🔔 Day Trader 시작{mode_label} ({now_kst().strftime('%Y.%m.%d %H:%M')})"
+    )
 
     sold_codes: set[str] = set()
     for t in monitor.trades_today:
@@ -1126,14 +1371,22 @@ def run_daily_cycle():
             sold_codes.add(t["code"])
 
     # --- 오버나이트 포지션 갭 체크 (09:05) ---
-    overnight_positions = {c: p for c, p in monitor.positions.items() if p.get("overnight")}
+    overnight_positions = {
+        c: p for c, p in monitor.positions.items() if p.get("overnight")
+    }
     if overnight_positions and not config.DRY_RUN:
-        logger.info("오버나이트 포지션 %d개 감지 — %s 갭 체크 대기",
-                    len(overnight_positions), config.OVERNIGHT_MORNING_CHECK)
+        logger.info(
+            "오버나이트 포지션 %d개 감지 — %s 갭 체크 대기",
+            len(overnight_positions),
+            config.OVERNIGHT_MORNING_CHECK,
+        )
         bot.send_message(
             f"🌙 오버나이트 포지션 {len(overnight_positions)}개 — "
             f"{config.OVERNIGHT_MORNING_CHECK} 갭 체크 예정\n"
-            + "\n".join(f"  {p['name']} {p['remaining_qty']}주" for p in overnight_positions.values())
+            + "\n".join(
+                f"  {p['name']} {p['remaining_qty']}주"
+                for p in overnight_positions.values()
+            )
         )
         wait_until(config.OVERNIGHT_MORNING_CHECK, bot, kis, monitor)
         for code, pos in list(overnight_positions.items()):
@@ -1141,7 +1394,11 @@ def run_daily_cycle():
                 price_data = kis.get_current_price(code)
                 current = price_data["price"]
                 overnight_close = pos.get("overnight_close_price", pos["entry_price"])
-                gap_pct = (current - overnight_close) / overnight_close * 100 if overnight_close > 0 else 0
+                gap_pct = (
+                    (current - overnight_close) / overnight_close * 100
+                    if overnight_close > 0
+                    else 0
+                )
                 entry = pos["entry_price"]
                 total_pnl_pct = (current - entry) / entry * 100 if entry > 0 else 0
 
@@ -1157,21 +1414,34 @@ def run_daily_cycle():
                     try:
                         sell_result = kis.place_sell_order(code, remaining)
                         if sell_result.get("rt_cd") == "0":
-                            monitor.trades_today.append({
-                                "code": code, "name": pos["name"],
-                                "action": "sell", "quantity": remaining,
-                                "entry_price": entry, "exit_price": current,
-                                "pnl_pct": total_pnl_pct,
-                                "pnl_amt": int((current - entry) * remaining),
-                                "reason": f"오버나이트 갭다운 {gap_pct:+.1f}%",
-                                "phase": "overnight",
-                            })
+                            monitor.trades_today.append(
+                                {
+                                    "code": code,
+                                    "name": pos["name"],
+                                    "action": "sell",
+                                    "quantity": remaining,
+                                    "entry_price": entry,
+                                    "exit_price": current,
+                                    "pnl_pct": total_pnl_pct,
+                                    "pnl_amt": int((current - entry) * remaining),
+                                    "reason": f"오버나이트 갭다운 {gap_pct:+.1f}%",
+                                    "phase": "overnight",
+                                }
+                            )
                             monitor.remove_position(code)
                             if db:
-                                db.save_trade(code, pos["name"], "sell", remaining, current,
-                                              reason=f"오버나이트 갭다운 {gap_pct:+.1f}%")
+                                db.save_trade(
+                                    code,
+                                    pos["name"],
+                                    "sell",
+                                    remaining,
+                                    current,
+                                    reason=f"오버나이트 갭다운 {gap_pct:+.1f}%",
+                                )
                         else:
-                            bot.send_message(f"⚠️ {pos['name']} 매도 실패: {sell_result.get('msg1', '')}")
+                            bot.send_message(
+                                f"⚠️ {pos['name']} 매도 실패: {sell_result.get('msg1', '')}"
+                            )
                     except Exception as e:
                         logger.error("오버나이트 매도 실패 %s: %s", pos["name"], e)
                         bot.send_message(f"⚠️ {pos['name']} 오버나이트 매도 오류: {e}")
@@ -1179,8 +1449,12 @@ def run_daily_cycle():
                     # 갭업/보합 → 트레일링 유지
                     pos["overnight"] = False  # 플래그 해제 — 일반 모니터링으로 전환
                     monitor._save_positions()
-                    logger.info("%s 갭 %+.1f%% — 트레일링 유지 (전체 %+.1f%%)",
-                                pos["name"], gap_pct, total_pnl_pct)
+                    logger.info(
+                        "%s 갭 %+.1f%% — 트레일링 유지 (전체 %+.1f%%)",
+                        pos["name"],
+                        gap_pct,
+                        total_pnl_pct,
+                    )
                     bot.send_message(
                         f"✅ <b>{pos['name']} 오버나이트 유지</b>\n\n"
                         f"전일 종가: {overnight_close:,}원 → 현재: {current:,}원 ({gap_pct:+.1f}%)\n"
@@ -1189,16 +1463,30 @@ def run_daily_cycle():
             except Exception as e:
                 logger.error("오버나이트 체크 실패 %s: %s", pos.get("name", code), e)
 
-
-    existing_active = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+    existing_active = {
+        k: v for k, v in monitor.positions.items() if not v.get("manual")
+    }
     if existing_active and past_analysis_time():
-        logger.info("기존 포지션 %d개 감지 — 모니터링 재개 (수동 %d개 제외)", len(existing_active), len(monitor.positions) - len(existing_active))
+        logger.info(
+            "기존 포지션 %d개 감지 — 모니터링 재개 (수동 %d개 제외)",
+            len(existing_active),
+            len(monitor.positions) - len(existing_active),
+        )
         bot.send_message(
             f"기존 포지션 {len(existing_active)}개 감지 — 모니터링 재개\n"
-            + "\n".join(f"  {p['name']} {p['remaining_qty']}주" for p in existing_active.values())
+            + "\n".join(
+                f"  {p['name']} {p['remaining_qty']}주"
+                for p in existing_active.values()
+            )
         )
         exit_reason = _run_monitoring_loop(
-            monitor, bot, kis, collector, analyzer, trader, sold_codes,
+            monitor,
+            bot,
+            kis,
+            collector,
+            analyzer,
+            trader,
+            sold_codes,
         )
         if exit_reason == "positions_cleared" and not _past_entry_cutoff():
             logger.info("포지션 청산 — 추가 사이클 가능, 멀티사이클 진입")
@@ -1227,19 +1515,33 @@ def run_daily_cycle():
             logger.info("일일 손실한도 도달 (%.1f%%) — 사이클 중단", daily_pnl)
             bot.send_message(f"🛑 일일 손실한도 도달 ({daily_pnl:.1f}%) — 매매 중단")
             break
-        profit_target = config.BOOST_DAILY_PROFIT_TARGET_PCT if _boost_state["active"] else config.DAILY_PROFIT_TARGET_PCT
+        profit_target = (
+            config.BOOST_DAILY_PROFIT_TARGET_PCT
+            if _boost_state["active"]
+            else config.DAILY_PROFIT_TARGET_PCT
+        )
         if daily_pnl >= profit_target:
             logger.info("일일 수익목표 달성 (%.1f%%) — 사이클 중단", daily_pnl)
             bot.send_message(f"🎯 일일 수익목표 달성 ({daily_pnl:.1f}%) — 매매 중단")
             break
         if consecutive_losses >= config.MAX_CONSECUTIVE_LOSSES:
             logger.info("%d연패 — 당일 매매 중단", consecutive_losses)
-            bot.send_message(f"🛑 {consecutive_losses}연패 — 당일 매매 중단 (리스크 관리)")
+            bot.send_message(
+                f"🛑 {consecutive_losses}연패 — 당일 매매 중단 (리스크 관리)"
+            )
             break
 
         trades_before = len(monitor.trades_today)
         exit_reason = _run_one_cycle(
-            cycle, kis, bot, db, collector, analyzer, trader, monitor, sold_codes,
+            cycle,
+            kis,
+            bot,
+            db,
+            collector,
+            analyzer,
+            trader,
+            monitor,
+            sold_codes,
             consecutive_losses=consecutive_losses,
         )
         for t in monitor.trades_today[trades_before:]:
@@ -1256,7 +1558,11 @@ def run_daily_cycle():
             else:
                 consecutive_losses = 0
                 # 단일 거래 수익 +N% 이상 → 당일 종료 (돈 지킨다)
-                profit_stop = config.BOOST_FIRST_PROFIT_STOP_PCT if _boost_state["active"] else config.FIRST_PROFIT_STOP_PCT
+                profit_stop = (
+                    config.BOOST_FIRST_PROFIT_STOP_PCT
+                    if _boost_state["active"]
+                    else config.FIRST_PROFIT_STOP_PCT
+                )
                 if last_pnl_pct >= profit_stop:
                     logger.info("수익 확보 +%.1f%% → 당일 매매 종료", last_pnl_pct)
                     bot.send_message(
@@ -1267,7 +1573,12 @@ def run_daily_cycle():
                     break
 
         # 재시도 가능한 결과: 쿨다운 후 다음 사이클
-        retryable = ("no_picks", "opening_filtered", "low_confidence", "positions_cleared")
+        retryable = (
+            "no_picks",
+            "opening_filtered",
+            "low_confidence",
+            "positions_cleared",
+        )
         if exit_reason not in retryable:
             logger.info("사이클 종료 (사유: %s) — 재시도 불가", exit_reason)
             break
@@ -1307,11 +1618,23 @@ def run_daily_cycle():
                     break
                 time.sleep(max(0, min(30, cooldown_end - time.time())))
 
-    active_positions = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+    active_positions = {
+        k: v for k, v in monitor.positions.items() if not v.get("manual")
+    }
     if active_positions and not monitor.should_stop:
-        logger.info("오전 잔여 포지션 %d개 — 모니터링 계속 (수동 %d개 제외)", len(active_positions), len(monitor.positions) - len(active_positions))
+        logger.info(
+            "오전 잔여 포지션 %d개 — 모니터링 계속 (수동 %d개 제외)",
+            len(active_positions),
+            len(monitor.positions) - len(active_positions),
+        )
         loop_exit = _run_monitoring_loop(
-            monitor, bot, kis, collector, analyzer, trader, sold_codes,
+            monitor,
+            bot,
+            kis,
+            collector,
+            analyzer,
+            trader,
+            sold_codes,
         )
         if loop_exit in ("market_close", "user_stop"):
             _send_daily_report(monitor, bot, db)
@@ -1331,8 +1654,15 @@ def run_daily_cycle():
 
         if not monitor.should_stop and not _past_afternoon_cutoff():
             _run_afternoon_phase(
-                kis, bot, db, collector, analyzer, trader, monitor,
-                sold_codes, consecutive_losses,
+                kis,
+                bot,
+                db,
+                collector,
+                analyzer,
+                trader,
+                monitor,
+                sold_codes,
+                consecutive_losses,
             )
 
     _send_daily_report(monitor, bot, db)
@@ -1340,10 +1670,15 @@ def run_daily_cycle():
 
 
 def _run_afternoon_phase(
-    kis: KISClient, bot: TelegramBot, db: Database,
-    collector: MarketDataCollector, analyzer: AIAnalyzer,
-    trader: Trader, monitor: PositionMonitor,
-    sold_codes: set, consecutive_losses: int,
+    kis: KISClient,
+    bot: TelegramBot,
+    db: Database,
+    collector: MarketDataCollector,
+    analyzer: AIAnalyzer,
+    trader: Trader,
+    monitor: PositionMonitor,
+    sold_codes: set,
+    consecutive_losses: int,
 ):
     """오후 전략: 모멘텀 + 눌림목 병행."""
     # 급등주 데이터 없으면 현재 시장에서 직접 스캔
@@ -1353,7 +1688,8 @@ def _run_afternoon_phase(
         try:
             raw = collector.kis.get_fluctuation_ranking_filtered(
                 rate_min=config.PULLBACK_MIN_MORNING_CHANGE,
-                rate_max=30.0, price_min=config.MOMENTUM_MIN_PRICE,
+                rate_max=30.0,
+                price_min=config.MOMENTUM_MIN_PRICE,
                 vol_min=config.MOMENTUM_MIN_VOLUME,
             )
             for s in (raw or [])[:10]:
@@ -1361,24 +1697,39 @@ def _run_afternoon_phase(
                 s_change = float(str(s.get("prdy_ctrt", "0")).replace(",", "") or "0")
                 s_high = int(str(s.get("stck_hgpr", 0)).replace(",", "") or 0)
                 s_cur = int(str(s.get("stck_prpr", 0)).replace(",", "") or 0)
-                s_prev = int(s_cur / (1 + s_change / 100)) if s_change > 0 and s_cur > 0 else 0
+                s_prev = (
+                    int(s_cur / (1 + s_change / 100))
+                    if s_change > 0 and s_cur > 0
+                    else 0
+                )
                 if s_code and s_change >= config.PULLBACK_MIN_MORNING_CHANGE:
-                    _morning_top_movers.append({
-                        "code": s_code,
-                        "name": s.get("hts_kor_isnm", "?"),
-                        "morning_high": s_high,
-                        "morning_high_pct": s_change,
-                        "prev_close": s_prev,
-                    })
+                    _morning_top_movers.append(
+                        {
+                            "code": s_code,
+                            "name": s.get("hts_kor_isnm", "?"),
+                            "morning_high": s_high,
+                            "morning_high_pct": s_change,
+                            "prev_close": s_prev,
+                        }
+                    )
             if _morning_top_movers:
                 _save_morning_top_movers()
-                logger.info("시장 스캔으로 급등주 %d종목 확보", len(_morning_top_movers))
+                logger.info(
+                    "시장 스캔으로 급등주 %d종목 확보", len(_morning_top_movers)
+                )
         except Exception as e:
             logger.warning("시장 스캔 실패: %s", e)
 
-    logger.info("━━━ 오후 전략 시작 (%s ~ %s) — 모멘텀 + 눌림목 ━━━",
-                config.AFTERNOON_PHASE_START, config.AFTERNOON_PHASE_END)
-    pullback_names = ", ".join(m["name"] for m in _morning_top_movers[:5]) if _morning_top_movers else "없음"
+    logger.info(
+        "━━━ 오후 전략 시작 (%s ~ %s) — 모멘텀 + 눌림목 ━━━",
+        config.AFTERNOON_PHASE_START,
+        config.AFTERNOON_PHASE_END,
+    )
+    pullback_names = (
+        ", ".join(m["name"] for m in _morning_top_movers[:5])
+        if _morning_top_movers
+        else "없음"
+    )
     bot.send_message(
         f"📈 <b>오후 전략 시작</b> (모멘텀 + 눌림목)\n"
         f"눌림목 대상: {pullback_names}\n"
@@ -1397,7 +1748,7 @@ def _run_afternoon_phase(
             bot.send_message(f"🛑 일일 손실한도 ({daily_pnl:.1f}%) — 오후 중단")
             break
 
-        active = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+        active = {k: v for k, v in monitor.positions.items() if not v.get("manual")}
         if not active:
             entered = False
 
@@ -1417,7 +1768,14 @@ def _run_afternoon_phase(
                     market_data = None
                 if market_data:
                     momentum_result = _try_momentum_entry(
-                        kis, bot, db, collector, trader, monitor, sold_codes, market_data,
+                        kis,
+                        bot,
+                        db,
+                        collector,
+                        trader,
+                        monitor,
+                        sold_codes,
+                        market_data,
                         consecutive_losses=consecutive_losses,
                     )
                     if momentum_result == "momentum_entered":
@@ -1427,7 +1785,13 @@ def _run_afternoon_phase(
             # 진입 성공 → 모니터링
             if entered:
                 _run_monitoring_loop(
-                    monitor, bot, kis, collector, analyzer, trader, sold_codes,
+                    monitor,
+                    bot,
+                    kis,
+                    collector,
+                    analyzer,
+                    trader,
+                    sold_codes,
                     phase="afternoon",
                 )
                 for t in monitor.trades_today:
@@ -1448,11 +1812,16 @@ def _run_afternoon_phase(
                     break
                 time.sleep(max(0, min(30, cooldown_end - time.time())))
 
+
 def _run_one_cycle(
     cycle: int,
-    kis: KISClient, bot: TelegramBot, db: Database,
-    collector: MarketDataCollector, analyzer: AIAnalyzer,
-    trader: Trader, monitor: PositionMonitor,
+    kis: KISClient,
+    bot: TelegramBot,
+    db: Database,
+    collector: MarketDataCollector,
+    analyzer: AIAnalyzer,
+    trader: Trader,
+    monitor: PositionMonitor,
     sold_codes: set,
     consecutive_losses: int = 0,
     phase: str = "morning",
@@ -1485,27 +1854,47 @@ def _run_one_cycle(
 
     logger.info("enriched %d 종목", len(enriched))
 
-    active = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+    active = {k: v for k, v in monitor.positions.items() if not v.get("manual")}
     if not active:
         momentum_result = _try_momentum_entry(
-            kis, bot, db, collector, trader, monitor, sold_codes, market_data,
+            kis,
+            bot,
+            db,
+            collector,
+            trader,
+            monitor,
+            sold_codes,
+            market_data,
             consecutive_losses=consecutive_losses,
         )
         if momentum_result == "momentum_entered":
             logger.info("모멘텀 진입 성공 — 모니터링 전환")
             return _run_monitoring_loop(
-                monitor, bot, kis, collector, analyzer, trader, sold_codes, phase="momentum",
+                monitor,
+                bot,
+                kis,
+                collector,
+                analyzer,
+                trader,
+                sold_codes,
+                phase="momentum",
             )
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+            return _run_monitoring_loop(
+                monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase
+            )
         logger.info("모멘텀 후보 없음 — 다음 사이클 대기")
         return "no_picks"
 
     if not enriched:
         logger.info("하드 필터 통과 종목 0개 — 이번 사이클 매매 비추천")
-        bot.send_message("📊 하드 필터 통과 종목 없음 — 시장 조건 재확인 후 재시도합니다.")
+        bot.send_message(
+            "📊 하드 필터 통과 종목 없음 — 시장 조건 재확인 후 재시도합니다."
+        )
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+            return _run_monitoring_loop(
+                monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase
+            )
         return "no_picks"
 
     logger.info("Phase 3 — AI 분석 중")
@@ -1533,8 +1922,11 @@ def _run_one_cycle(
         cur_price = int(top.get("stck_prpr", 0))
         analysis = _build_score_fallback(top, cur_price, phase)
 
-    logger.info("분석 완료 (AI=%s) — 추천: %s",
-                ai_used, analysis.get("marketAssessment", {}).get("recommendation", "?"))
+    logger.info(
+        "분석 완료 (AI=%s) — 추천: %s",
+        ai_used,
+        analysis.get("marketAssessment", {}).get("recommendation", "?"),
+    )
     if not config.DRY_RUN and not db.save_analysis(analysis):
         logger.warning("분석 DB 저장 실패")
         bot.send_message("⚠️ 분석 결과 DB 저장 실패")
@@ -1558,7 +1950,9 @@ def _run_one_cycle(
     veto = analysis.get("vetoResult", {})
     picks = analysis.get("picks", [])
 
-    enriched_score_map = {s.get("mksc_shrn_iscd", ""): s.get("score", 0) for s in enriched}
+    enriched_score_map = {
+        s.get("mksc_shrn_iscd", ""): s.get("score", 0) for s in enriched
+    }
     for pick in picks:
         if "score" not in pick:
             pick["score"] = enriched_score_map.get(pick.get("symbol", ""), 0)
@@ -1568,14 +1962,18 @@ def _run_one_cycle(
         logger.info("AI veto 거부: %s", veto_reason)
         bot.send_message(f"🚫 AI Veto 거부: {veto_reason}")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+            return _run_monitoring_loop(
+                monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase
+            )
         return "no_picks"
 
     if recommendation == "매매비추천" or not picks:
         logger.info("매매 비추천 — 매수 없이 대기")
         bot.send_message("📊 매매 비추천 — 시장 조건 재확인 후 재시도합니다.")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+            return _run_monitoring_loop(
+                monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase
+            )
         return "no_picks"
 
     # 손절 후 다음 사이클: AI 신뢰도 기준 강화
@@ -1593,7 +1991,16 @@ def _run_one_cycle(
             if not picks:
                 bot.send_message("신뢰도 기준 미달 — 이번 사이클 매수 스킵")
                 if monitor.positions:
-                    return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+                    return _run_monitoring_loop(
+                        monitor,
+                        bot,
+                        kis,
+                        collector,
+                        analyzer,
+                        trader,
+                        sold_codes,
+                        phase=phase,
+                    )
                 return "low_confidence"
 
     # ── Phase 5 — 오프닝 검증 (실시간 안전 필터) ──
@@ -1609,7 +2016,10 @@ def _run_one_cycle(
             volume = price_data["volume"]
             logger.info(
                 "%s 오프닝: %s원 (%+.1f%%), 거래량 %s",
-                name, f"{cur_price:,}", change_pct, f"{volume:,}",
+                name,
+                f"{cur_price:,}",
+                change_pct,
+                f"{volume:,}",
             )
         except Exception as e:
             logger.warning("%s 현재가 조회 실패 — 검증 스킵: %s", name, e)
@@ -1653,7 +2063,9 @@ def _run_one_cycle(
     if not validated_picks:
         bot.send_message("📊 오프닝 검증 결과: 모든 후보 탈락 — 매수 없이 모니터링")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+            return _run_monitoring_loop(
+                monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase
+            )
         return "opening_filtered"
 
     passed_names = ", ".join(p["name"] for p in validated_picks)
@@ -1664,11 +2076,15 @@ def _run_one_cycle(
 
     # ── Phase 7 — 매수 주문 실행 ──
     logger.info("Phase 7 — 매수 주문 실행")
-    orders = trader.calculate_orders(validated_picks, available_cash, sold_codes, phase=phase)
+    orders = trader.calculate_orders(
+        validated_picks, available_cash, sold_codes, phase=phase
+    )
     if not orders:
         bot.send_message("주문 가능한 종목이 없습니다.")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+            return _run_monitoring_loop(
+                monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase
+            )
         return "no_orders"
     bot.send_buy_orders(orders)
     results = trader.execute_buy_orders(orders)
@@ -1680,7 +2096,9 @@ def _run_one_cycle(
     if not success_orders:
         bot.send_message("모든 매수 주문 실패.")
         if monitor.positions:
-            return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+            return _run_monitoring_loop(
+                monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase
+            )
         return "all_failed"
     order_map = {o["stock_code"]: o for o in success_orders}
 
@@ -1691,13 +2109,20 @@ def _run_one_cycle(
         time.sleep(15)
         result = trader.check_fills(success_orders)
         if result is None:
-            logger.warning("체결 조회 API 오류 — 재시도 (시도 %d/%d)", attempt + 1, max_attempts)
+            logger.warning(
+                "체결 조회 API 오류 — 재시도 (시도 %d/%d)", attempt + 1, max_attempts
+            )
             continue
         fills = result
         filled_names = [f["name"] for f in fills]
-        logger.info("체결 %d/%d — %s (시도 %d/%d)",
-                     len(fills), len(success_orders),
-                     ", ".join(filled_names) or "없음", attempt + 1, max_attempts)
+        logger.info(
+            "체결 %d/%d — %s (시도 %d/%d)",
+            len(fills),
+            len(success_orders),
+            ", ".join(filled_names) or "없음",
+            attempt + 1,
+            max_attempts,
+        )
         if len(fills) >= len(success_orders):
             break
 
@@ -1720,10 +2145,20 @@ def _run_one_cycle(
                             f"시장 급변동 — 모니터링 주의"
                         )
                         bot.send_message(msg)
-                        logger.warning("%s 체결가 괴리 %.1f%% (주문 %s → 체결 %s)",
-                                       f["name"], fill_dev, f"{order_price:,}", f"{fill_price:,}")
-                    logger.info("%s 슬리피지: %+.3f%% (주문 %s → 체결 %s)",
-                                f["name"], buy_slippage_pct, f"{order_price:,}", f"{fill_price:,}")
+                        logger.warning(
+                            "%s 체결가 괴리 %.1f%% (주문 %s → 체결 %s)",
+                            f["name"],
+                            fill_dev,
+                            f"{order_price:,}",
+                            f"{fill_price:,}",
+                        )
+                    logger.info(
+                        "%s 슬리피지: %+.3f%% (주문 %s → 체결 %s)",
+                        f["name"],
+                        buy_slippage_pct,
+                        f"{order_price:,}",
+                        f"{fill_price:,}",
+                    )
                 try:
                     fresh = kis.get_current_price(f["stock_code"])
                     fresh_price = fresh["price"]
@@ -1736,12 +2171,18 @@ def _run_one_cycle(
                                 f"손절선 이미 하회 — 즉시 매도 예정"
                             )
                             bot.send_message(msg)
-                            logger.warning("%s 체결 직후 현재가 이미 손절선 하회 (%.1f%%)", f["name"], cur_vs_fill)
+                            logger.warning(
+                                "%s 체결 직후 현재가 이미 손절선 하회 (%.1f%%)",
+                                f["name"],
+                                cur_vs_fill,
+                            )
                 except Exception as e:
                     logger.warning("%s 체결 후 현재가 확인 실패: %s", f["name"], e)
 
                 adjusted_stop = _recalc_stop_loss(
-                    fill_price, order_price, matching_order["stop_loss"],
+                    fill_price,
+                    order_price,
+                    matching_order["stop_loss"],
                 )
                 monitor.add_position(
                     stock_code=f["stock_code"],
@@ -1769,13 +2210,18 @@ def _run_one_cycle(
                 if pq_attempt < 2:
                     time.sleep(2)
                 else:
-                    bot.send_message("⚠️ 미체결 조회 3회 실패 — /balance 로 수동 확인 필요")
+                    bot.send_message(
+                        "⚠️ 미체결 조회 3회 실패 — /balance 로 수동 확인 필요"
+                    )
 
     if pending:
         logger.info("Phase 8.5 — 미체결 %d건 재분석", len(pending))
         bot.send_message(
             f"⏳ 미체결 {len(pending)}건 — 재분석 진행\n"
-            + "\n".join(f"  {p['name']} 잔여 {p['remaining_qty']}주 × {p['order_price']:,}원" for p in pending)
+            + "\n".join(
+                f"  {p['name']} 잔여 {p['remaining_qty']}주 × {p['order_price']:,}원"
+                for p in pending
+            )
         )
 
         for p in pending:
@@ -1816,15 +2262,24 @@ def _run_one_cycle(
     elif not fills:
         bot.send_message("⚠️ 체결 확인 불가 — /balance 명령어로 수동 확인해주세요.")
 
-    _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes, phase=phase)
+    _try_reinvest(
+        kis, bot, collector, analyzer, trader, monitor, sold_codes, phase=phase
+    )
 
     logger.info("Phase 9 — 모니터링 시작")
-    return _run_monitoring_loop(monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase)
+    return _run_monitoring_loop(
+        monitor, bot, kis, collector, analyzer, trader, sold_codes, phase=phase
+    )
 
 
 def _run_monitoring_loop(
-    monitor: PositionMonitor, bot: TelegramBot, kis: KISClient,
-    collector=None, analyzer=None, trader=None, sold_codes=None,
+    monitor: PositionMonitor,
+    bot: TelegramBot,
+    kis: KISClient,
+    collector=None,
+    analyzer=None,
+    trader=None,
+    sold_codes=None,
     phase: str = "morning",
 ) -> str:
     # 모니터링 진입 전 KIS 잔고 동기화
@@ -1845,9 +2300,12 @@ def _run_monitoring_loop(
             logger.info("사용자 /stop 명령 — 모니터링 종료")
             return "user_stop"
 
-        active = {k: v for k, v in monitor.positions.items() if not v.get('manual')}
+        active = {k: v for k, v in monitor.positions.items() if not v.get("manual")}
         if not active:
-            logger.info("활성 포지션 청산 — 모니터링 종료 (수동 %d개 유지)", len(monitor.positions))
+            logger.info(
+                "활성 포지션 청산 — 모니터링 종료 (수동 %d개 유지)",
+                len(monitor.positions),
+            )
             bot.send_message("모든 활성 포지션 청산 완료 — 모니터링 종료")
             return "positions_cleared"
 
@@ -1859,7 +2317,11 @@ def _run_monitoring_loop(
                 logger.error("포지션 체크 오류: %s", e)
             if len(monitor.trades_today) > trades_before:
                 for t in monitor.trades_today[trades_before:]:
-                    if t.get("code") and sold_codes is not None and t.get("pnl_amt", 0) < 0:
+                    if (
+                        t.get("code")
+                        and sold_codes is not None
+                        and t.get("pnl_amt", 0) < 0
+                    ):
                         sold_codes.add(t["code"])
                 last_reinvest = 0
 
@@ -1872,16 +2334,31 @@ def _run_monitoring_loop(
             manual = bot._reinvest_requested
             if manual:
                 bot._reinvest_requested = False
-            cutoff_fn = _past_afternoon_cutoff if phase == "afternoon" else _past_entry_cutoff
-            if manual or (time.time() - last_reinvest >= config.REINVEST_CHECK_INTERVAL
-                          and not cutoff_fn()):
+            cutoff_fn = (
+                _past_afternoon_cutoff if phase == "afternoon" else _past_entry_cutoff
+            )
+            if manual or (
+                time.time() - last_reinvest >= config.REINVEST_CHECK_INTERVAL
+                and not cutoff_fn()
+            ):
                 last_reinvest = time.time()
-                _try_reinvest(kis, bot, collector, analyzer, trader, monitor, sold_codes or set(), phase=phase)
+                _try_reinvest(
+                    kis,
+                    bot,
+                    collector,
+                    analyzer,
+                    trader,
+                    monitor,
+                    sold_codes or set(),
+                    phase=phase,
+                )
 
         time.sleep(config.CHECK_INTERVAL)
 
 
-def _send_daily_report(monitor: PositionMonitor, bot: TelegramBot, db: Database | None = None):
+def _send_daily_report(
+    monitor: PositionMonitor, bot: TelegramBot, db: Database | None = None
+):
     """일일 리포트 전송 + DB 저장."""
     logger.info("일일 리포트 생성")
     summary = monitor.get_daily_summary()
@@ -1889,7 +2366,12 @@ def _send_daily_report(monitor: PositionMonitor, bot: TelegramBot, db: Database 
 
     if db:
         remaining = [
-            {"code": code, "name": pos["name"], "qty": pos["remaining_qty"], "entry": pos["entry_price"]}
+            {
+                "code": code,
+                "name": pos["name"],
+                "qty": pos["remaining_qty"],
+                "entry": pos["entry_price"],
+            }
             for code, pos in monitor.positions.items()
         ]
         if not db.save_daily_report(monitor.trades_today, remaining):
@@ -1904,9 +2386,12 @@ def _send_daily_report(monitor: PositionMonitor, bot: TelegramBot, db: Database 
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def _sleep_until_midnight():
     n = now_kst()
-    tomorrow = (n + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    tomorrow = (n + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
     seconds = (tomorrow - n).total_seconds()
     logger.info("다음 사이클까지 %.0f초 대기 (00:00 KST)", seconds)
     time.sleep(max(seconds, 60))
@@ -1914,6 +2399,7 @@ def _sleep_until_midnight():
 
 if __name__ == "__main__":
     import argparse
+
     _parser = argparse.ArgumentParser(description="Day Trader")
     _parser.add_argument("--dry-run", action="store_true", help="모의투자 모드")
     _args = _parser.parse_args()
