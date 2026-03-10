@@ -17,7 +17,14 @@ def align_to_tick(price: int, round_up: bool = False) -> int:
     """KRX 호가단위에 맞게 가격 보정.
     round_up=False: 내림 (매도용 — 체결 확률 높임)
     round_up=True: 올림 (매수용 — 체결 확률 높임)
+
+    2023-01-25 KRX 차세대시스템 기준:
+      <2,000원: 1원 | <5,000원: 5원 | <20,000원: 10원
+      <50,000원: 50원 | <200,000원: 100원 | <500,000원: 500원 | ≥500,000원: 1,000원
     """
+    price = int(price)
+    if price <= 0:
+        return 0
     if price < 2000:
         tick = 1
     elif price < 5000:
@@ -33,8 +40,18 @@ def align_to_tick(price: int, round_up: bool = False) -> int:
     else:
         tick = 1000
     if round_up:
-        return ((price + tick - 1) // tick) * tick
-    return (price // tick) * tick
+        aligned = ((price + tick - 1) // tick) * tick
+    else:
+        aligned = (price // tick) * tick
+    if aligned != price:
+        logger.debug(
+            "호가단위 보정: %d → %d (tick=%d, %s)",
+            price,
+            aligned,
+            tick,
+            "올림" if round_up else "내림",
+        )
+    return aligned
 
 
 class KISClient:
@@ -57,16 +74,24 @@ class KISClient:
             except requests.exceptions.HTTPError as e:
                 status = e.response.status_code if e.response is not None else 0
                 if status in (429, 503) and attempt < max_retries - 1:
-                    wait = 2 ** attempt
-                    logger.warning("API 재시도 %d/%d (HTTP %d): %s", attempt + 1, max_retries, status, url.split("/")[-1])
+                    wait = 2**attempt
+                    logger.warning(
+                        "API 재시도 %d/%d (HTTP %d): %s",
+                        attempt + 1,
+                        max_retries,
+                        status,
+                        url.split("/")[-1],
+                    )
                     time.sleep(wait)
                     last_error = e
                 else:
                     raise
             except requests.exceptions.ConnectionError as e:
                 if attempt < max_retries - 1:
-                    wait = 2 ** attempt
-                    logger.warning("연결 오류 재시도 %d/%d: %s", attempt + 1, max_retries, e)
+                    wait = 2**attempt
+                    logger.warning(
+                        "연결 오류 재시도 %d/%d: %s", attempt + 1, max_retries, e
+                    )
                     time.sleep(wait)
                     last_error = e
                 else:
@@ -95,7 +120,10 @@ class KISClient:
         return False
 
     def _save_token_cache(self):
-        cache = {"access_token": self._access_token, "expires_at": self._token_expires_at}
+        cache = {
+            "access_token": self._access_token,
+            "expires_at": self._token_expires_at,
+        }
         with open(config.TOKEN_CACHE_FILE, "w") as f:
             json.dump(cache, f)
 
@@ -106,7 +134,11 @@ class KISClient:
             logger.info("캐시된 토큰 사용")
             return self._access_token
         url = f"{self.base_url}/oauth2/tokenP"
-        body = {"grant_type": "client_credentials", "appkey": self.app_key, "appsecret": self.app_secret}
+        body = {
+            "grant_type": "client_credentials",
+            "appkey": self.app_key,
+            "appsecret": self.app_secret,
+        }
         resp = self._post(url, json=body)
         data = resp.json()
         self._access_token = data["access_token"]
@@ -119,7 +151,9 @@ class KISClient:
         return {
             "content-type": "application/json; charset=utf-8",
             "authorization": f"Bearer {self.get_access_token()}",
-            "appkey": self.app_key, "appsecret": self.app_secret, "tr_id": tr_id,
+            "appkey": self.app_key,
+            "appsecret": self.app_secret,
+            "tr_id": tr_id,
         }
 
     def get_current_price(self, stock_code: str) -> dict:
@@ -136,7 +170,6 @@ class KISClient:
             "low": int(o.get("stck_lwpr", 0)),
         }
 
-
     def place_sell_order(self, stock_code: str, quantity: int, price: int = 0) -> dict:
         """매도 주문. price>0이면 지정가, 0이면 시장가."""
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-cash"
@@ -146,8 +179,12 @@ class KISClient:
         else:
             ord_dvsn, ord_unpr = "01", "0"  # 시장가
         body = {
-            "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
-            "PDNO": stock_code, "ORD_DVSN": ord_dvsn, "ORD_QTY": str(quantity), "ORD_UNPR": ord_unpr,
+            "CANO": config.KIS_CANO,
+            "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
+            "PDNO": stock_code,
+            "ORD_DVSN": ord_dvsn,
+            "ORD_QTY": str(quantity),
+            "ORD_UNPR": ord_unpr,
         }
         resp = self._post(url, headers=self._headers("TTTC0011U"), json=body)
         return resp.json()
@@ -156,8 +193,12 @@ class KISClient:
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-cash"
         price = align_to_tick(price, round_up=True)
         body = {
-            "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
-            "PDNO": stock_code, "ORD_DVSN": "00", "ORD_QTY": str(quantity), "ORD_UNPR": str(price),
+            "CANO": config.KIS_CANO,
+            "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
+            "PDNO": stock_code,
+            "ORD_DVSN": "00",
+            "ORD_QTY": str(quantity),
+            "ORD_UNPR": str(price),
         }
         resp = self._post(url, headers=self._headers("TTTC0802U"), json=body)
         return resp.json()
@@ -165,31 +206,45 @@ class KISClient:
     def get_balance(self) -> list[dict]:
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-balance"
         params = {
-            "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
-            "AFHR_FLPR_YN": "N", "OFL_YN": "", "INQR_DVSN": "02", "UNPR_DVSN": "01",
-            "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "01",
-            "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+            "CANO": config.KIS_CANO,
+            "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
+            "AFHR_FLPR_YN": "N",
+            "OFL_YN": "",
+            "INQR_DVSN": "02",
+            "UNPR_DVSN": "01",
+            "FUND_STTL_ICLD_YN": "N",
+            "FNCG_AMT_AUTO_RDPT_YN": "N",
+            "PRCS_DVSN": "01",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
         }
         resp = self._get(url, headers=self._headers("TTTC8434R"), params=params)
         holdings = []
         for item in resp.json().get("output1", []):
             if int(item.get("hldg_qty", 0)) > 0:
-                holdings.append({
-                    "stock_code": item.get("pdno", ""), "name": item.get("prdt_name", ""),
-                    "quantity": int(item.get("hldg_qty", 0)),
-                    "avg_price": int(float(item.get("pchs_avg_pric", 0))),
-                    "current_price": int(item.get("prpr", 0)),
-                    "pnl_pct": float(item.get("evlu_pfls_rt", 0)),
-                    "pnl_amt": int(item.get("evlu_pfls_amt", 0)),
-                })
+                holdings.append(
+                    {
+                        "stock_code": item.get("pdno", ""),
+                        "name": item.get("prdt_name", ""),
+                        "quantity": int(item.get("hldg_qty", 0)),
+                        "avg_price": int(float(item.get("pchs_avg_pric", 0))),
+                        "current_price": int(item.get("prpr", 0)),
+                        "pnl_pct": float(item.get("evlu_pfls_rt", 0)),
+                        "pnl_amt": int(item.get("evlu_pfls_amt", 0)),
+                    }
+                )
         return holdings
 
     def get_available_cash(self) -> int:
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
         params = {
-            "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
-            "PDNO": "005930", "ORD_UNPR": "0", "ORD_DVSN": "01",
-            "CMA_EVLU_AMT_ICLD_YN": "Y", "OVRS_ICLD_YN": "Y",
+            "CANO": config.KIS_CANO,
+            "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
+            "PDNO": "005930",
+            "ORD_UNPR": "0",
+            "ORD_DVSN": "01",
+            "CMA_EVLU_AMT_ICLD_YN": "Y",
+            "OVRS_ICLD_YN": "Y",
         }
         resp = self._get(url, headers=self._headers("TTTC8908R"), params=params)
         output = resp.json().get("output", {})
@@ -197,12 +252,19 @@ class KISClient:
         nrcvb = int(output.get("nrcvb_buy_amt", 0) or 0)
         cash = int(output.get("ord_psbl_cash", 0) or 0)
         result = nrcvb if nrcvb > 0 else cash
-        logger.info("예수금 조회 — 미수없는매수금액: %s원, 주문가능현금: %s원 → %s원",
-                     f"{nrcvb:,}", f"{cash:,}", f"{result:,}")
+        logger.info(
+            "예수금 조회 — 미수없는매수금액: %s원, 주문가능현금: %s원 → %s원",
+            f"{nrcvb:,}",
+            f"{cash:,}",
+            f"{result:,}",
+        )
         return result
 
     def cancel_order(
-        self, krx_fwdg_ord_orgno: str, orgn_odno: str, quantity: int,
+        self,
+        krx_fwdg_ord_orgno: str,
+        orgn_odno: str,
+        quantity: int,
     ) -> dict:
         """미체결 주문 취소. TTTC0803U (실전)."""
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/order-rvsecncl"
@@ -225,61 +287,92 @@ class KISClient:
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
         today = datetime.now(KST).strftime("%Y%m%d")
         params = {
-            "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
-            "INQR_STRT_DT": today, "INQR_END_DT": today,
+            "CANO": config.KIS_CANO,
+            "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
+            "INQR_STRT_DT": today,
+            "INQR_END_DT": today,
             "SLL_BUY_DVSN_CD": sll_buy_dvsn,
-            "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "02",
-            "ORD_GNO_BRNO": "", "ODNO": "", "INQR_DVSN_3": "00",
-            "INQR_DVSN_1": "", "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+            "INQR_DVSN": "00",
+            "PDNO": "",
+            "CCLD_DVSN": "02",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
         }
         resp = self._get(url, headers=self._headers("TTTC8001R"), params=params)
         pending = []
         for item in resp.json().get("output1", []):
             rmn_qty = int(item.get("rmn_qty", 0))
             if rmn_qty > 0:
-                pending.append({
-                    "stock_code": item.get("pdno", ""),
-                    "name": item.get("prdt_name", ""),
-                    "order_qty": int(item.get("ord_qty", 0)),
-                    "filled_qty": int(item.get("tot_ccld_qty", 0)),
-                    "remaining_qty": rmn_qty,
-                    "order_price": int(float(item.get("ord_unpr", 0))),
-                    "odno": item.get("odno", ""),
-                    "ord_gno_brno": item.get("ord_gno_brno", ""),
-                })
+                pending.append(
+                    {
+                        "stock_code": item.get("pdno", ""),
+                        "name": item.get("prdt_name", ""),
+                        "order_qty": int(item.get("ord_qty", 0)),
+                        "filled_qty": int(item.get("tot_ccld_qty", 0)),
+                        "remaining_qty": rmn_qty,
+                        "order_price": int(float(item.get("ord_unpr", 0))),
+                        "odno": item.get("odno", ""),
+                        "ord_gno_brno": item.get("ord_gno_brno", ""),
+                    }
+                )
         return pending
 
     def get_order_fills(self, sll_buy_dvsn: str = "00") -> list[dict]:
         url = f"{self.base_url}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
         today = datetime.now(KST).strftime("%Y%m%d")
         params = {
-            "CANO": config.KIS_CANO, "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
-            "INQR_STRT_DT": today, "INQR_END_DT": today, "SLL_BUY_DVSN_CD": sll_buy_dvsn,
-            "INQR_DVSN": "00", "PDNO": "", "CCLD_DVSN": "01", "ORD_GNO_BRNO": "",
-            "ODNO": "", "INQR_DVSN_3": "00", "INQR_DVSN_1": "",
-            "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+            "CANO": config.KIS_CANO,
+            "ACNT_PRDT_CD": config.KIS_ACNT_PRDT_CD,
+            "INQR_STRT_DT": today,
+            "INQR_END_DT": today,
+            "SLL_BUY_DVSN_CD": sll_buy_dvsn,
+            "INQR_DVSN": "00",
+            "PDNO": "",
+            "CCLD_DVSN": "01",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
         }
         resp = self._get(url, headers=self._headers("TTTC8001R"), params=params)
         fills = []
         for item in resp.json().get("output1", []):
             qty = int(item.get("tot_ccld_qty", 0))
             if qty > 0:
-                fills.append({
-                    "stock_code": item.get("pdno", ""), "name": item.get("prdt_name", ""),
-                    "quantity": qty, "price": int(float(item.get("avg_prvs", 0))),
-                    "amount": int(item.get("tot_ccld_amt", 0)),
-                    "odno": item.get("odno", ""),  # 주문번호 — 동일 종목 중복체결 구분용
-                })
+                fills.append(
+                    {
+                        "stock_code": item.get("pdno", ""),
+                        "name": item.get("prdt_name", ""),
+                        "quantity": qty,
+                        "price": int(float(item.get("avg_prvs", 0))),
+                        "amount": int(item.get("tot_ccld_amt", 0)),
+                        "odno": item.get(
+                            "odno", ""
+                        ),  # 주문번호 — 동일 종목 중복체결 구분용
+                    }
+                )
         return fills
 
     def get_volume_ranking(self) -> list[dict]:
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/volume-rank"
         params = {
-            "FID_COND_MRKT_DIV_CODE": "J", "FID_COND_SCR_DIV_CODE": "20101",
-            "FID_INPUT_ISCD": "0000", "FID_DIV_CLS_CODE": "0", "FID_BLNG_CLS_CODE": "0",
-            "FID_TRGT_CLS_CODE": "111111111", "FID_TRGT_EXLS_CLS_CODE": "000000",
-            "FID_INPUT_PRICE_1": "0", "FID_INPUT_PRICE_2": "0",
-            "FID_VOL_CNT": "0", "FID_INPUT_DATE_1": "",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_COND_SCR_DIV_CODE": "20101",
+            "FID_INPUT_ISCD": "0000",
+            "FID_DIV_CLS_CODE": "0",
+            "FID_BLNG_CLS_CODE": "0",
+            "FID_TRGT_CLS_CODE": "111111111",
+            "FID_TRGT_EXLS_CLS_CODE": "000000",
+            "FID_INPUT_PRICE_1": "0",
+            "FID_INPUT_PRICE_2": "0",
+            "FID_VOL_CNT": "0",
+            "FID_INPUT_DATE_1": "",
         }
         resp = self._get(url, headers=self._headers("FHPST01710000"), params=params)
         return resp.json().get("output", []) or []
@@ -289,10 +382,15 @@ class KISClient:
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_COND_SCR_DIV_CODE": "20170" if is_up else "20175",
-            "FID_INPUT_ISCD": "0000", "FID_DIV_CLS_CODE": "0", "FID_BLNG_CLS_CODE": "0",
-            "FID_TRGT_CLS_CODE": "111111111", "FID_TRGT_EXLS_CLS_CODE": "000000",
-            "FID_INPUT_PRICE_1": "0", "FID_INPUT_PRICE_2": "0",
-            "FID_VOL_CNT": "0", "FID_INPUT_DATE_1": "",
+            "FID_INPUT_ISCD": "0000",
+            "FID_DIV_CLS_CODE": "0",
+            "FID_BLNG_CLS_CODE": "0",
+            "FID_TRGT_CLS_CODE": "111111111",
+            "FID_TRGT_EXLS_CLS_CODE": "000000",
+            "FID_INPUT_PRICE_1": "0",
+            "FID_INPUT_PRICE_2": "0",
+            "FID_VOL_CNT": "0",
+            "FID_INPUT_DATE_1": "",
         }
         resp = self._get(url, headers=self._headers("FHPST01700000"), params=params)
         return resp.json().get("output", []) or []
@@ -329,10 +427,12 @@ class KISClient:
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice"
         now = datetime.now(KST)
         params = {
-            "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": stock_code,
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": stock_code,
             "FID_INPUT_DATE_1": (now - timedelta(days=365)).strftime("%Y%m%d"),
             "FID_INPUT_DATE_2": now.strftime("%Y%m%d"),
-            "FID_PERIOD_DIV_CODE": "D", "FID_ORG_ADJ_PRC": "0",
+            "FID_PERIOD_DIV_CODE": "D",
+            "FID_ORG_ADJ_PRC": "0",
         }
         resp = self._get(url, headers=self._headers("FHKST03010100"), params=params)
         return resp.json().get("output2", []) or []
@@ -341,8 +441,10 @@ class KISClient:
         url = f"{self.base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
         now = datetime.now(KST)
         params = {
-            "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": stock_code,
-            "FID_INPUT_HOUR_1": now.strftime("%H%M%S"), "FID_PW_DATA_INCU_YN": "Y",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": stock_code,
+            "FID_INPUT_HOUR_1": now.strftime("%H%M%S"),
+            "FID_PW_DATA_INCU_YN": "Y",
             "FID_ETC_CLS_CODE": "",
         }
         resp = self._get(url, headers=self._headers("FHKST03010200"), params=params)
@@ -378,10 +480,14 @@ class KISClient:
         try:
             resp = self._get(
                 "https://m.stock.naver.com/front-api/marketIndex/productDetail",
-                params={"category": "exchange", "reutersCode": "FX_USDKRW"}, timeout=5,
+                params={"category": "exchange", "reutersCode": "FX_USDKRW"},
+                timeout=5,
             )
             r = resp.json().get("result", {})
-            return {"exchange_rate": r.get("closePrice", ""), "change_rate": r.get("compareToPreviousClosePrice", "")}
+            return {
+                "exchange_rate": r.get("closePrice", ""),
+                "change_rate": r.get("compareToPreviousClosePrice", ""),
+            }
         except Exception:
             return {}
 

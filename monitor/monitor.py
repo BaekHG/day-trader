@@ -456,9 +456,15 @@ class PositionMonitor:
             result = self.kis.place_sell_order(code, qty, price=target_price)
 
             if result.get("rt_cd") != "0":
-                logger.warning(
-                    "매도 주문 제출 실패: %s — 다음 단계", result.get("msg1", "")
-                )
+                err_msg = result.get("msg1", "")
+                if "호가" in err_msg:
+                    logger.warning(
+                        "매도 호가단위 오류 — %s %s원 → 시장가 폴백",
+                        name,
+                        f"{target_price:,}",
+                    )
+                    return self.kis.place_sell_order(code, qty)
+                logger.warning("매도 주문 제출 실패: %s — 다음 단계", err_msg)
                 continue
 
             # --- 체결 대기 ---
@@ -583,6 +589,14 @@ class PositionMonitor:
                         continue
                     self.bot.send_message(f"⚠️ {name} 매도 3회 실패: {e}")
                     return
+
+        if not success and "호가" in result.get("msg1", ""):
+            logger.warning("%s 호가단위 오류 — 시장가 재시도", name)
+            try:
+                result = self.kis.place_sell_order(code, qty)
+                success = result.get("rt_cd") == "0"
+            except Exception as e_retry:
+                logger.error("%s 호가단위 시장가 재시도 실패: %s", name, e_retry)
 
         if success:
             pos.pop("_last_sell_error", None)
