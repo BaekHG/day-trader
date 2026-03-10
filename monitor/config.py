@@ -39,7 +39,7 @@ TRAILING_STOP_LEVELS = [
 # --- 멀티사이클 ---
 MAX_CYCLES = int(os.getenv("MAX_CYCLES", "10"))
 NO_NEW_ENTRY_AFTER = os.getenv(
-    "NO_NEW_ENTRY_AFTER", "10:30"
+    "NO_NEW_ENTRY_AFTER", "14:30"
 )  # 10:30 이후 신규 진입 차단
 FORCE_CLOSE_TIME = "15:10"  # 손실 종목 강제 청산 (수익 종목은 트레일링 유지)
 FINAL_CLOSE_TIME = "15:20"  # 전량 강제 청산 (체결 여유 10분 확보)
@@ -247,12 +247,8 @@ MOMENTUM_TIME_STOP_MIN_PROFIT = float(
 MOMENTUM_DAILY_MAX_LOSSES = int(
     os.getenv("MOMENTUM_DAILY_MAX_LOSSES", "3")
 )  # 6→3: 하루 최대 3번 손절 — 수수료 절약, 3연패 후 그날은 쉼
-MAX_DAILY_TRADES = int(
-    os.getenv("MAX_DAILY_TRADES", "5")
-)  # 하루 최대 5회 거래 (승패 무관) — 수수료 상한 고정
-SLIPPAGE_GUARD_PCT = float(
-    os.getenv("SLIPPAGE_GUARD_PCT", "0.3")
-)  # 매수 슬리피지 0.3% 초과 시 즉시 청산
+MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "10"))
+SLIPPAGE_GUARD_PCT = float(os.getenv("SLIPPAGE_GUARD_PCT", "1.0"))
 MOMENTUM_OPTIMAL_CHANGE_MIN = float(
     os.getenv("MOMENTUM_OPTIMAL_CHANGE_MIN", "8.0")
 )  # 스코어링: 최적 등락률 하한
@@ -283,7 +279,9 @@ SELL_STEP_WAIT_SEC = int(os.getenv("SELL_STEP_WAIT_SEC", "3"))  # 각 단계 대
 # --- 후반 시간대 (10:30 이후) 보수적 파라미터 ---
 LATE_SESSION_START = "10:30"
 LATE_SESSION_POSITION_PCT = 40
-LATE_SESSION_MIN_SCORE = 65
+LATE_SESSION_MIN_SCORE = (
+    40  # 65→40: 오후 거래량 구조적 감소로 스코어 낮음 (30~40대 정상)
+)
 LATE_SESSION_STOP_LOSS_PCT = 2.0
 LATE_SESSION_REQUIRE_PROFIT = (
     os.getenv("LATE_SESSION_REQUIRE_PROFIT", "false").lower() == "true"
@@ -371,8 +369,8 @@ BOOST_FIRST_PROFIT_STOP_PCT = float(
     os.getenv("BOOST_FIRST_PROFIT_STOP_PCT", "5.0")
 )  # +5% 이상 시 종료
 BOOST_NO_NEW_ENTRY_AFTER = os.getenv(
-    "BOOST_NO_NEW_ENTRY_AFTER", "13:00"
-)  # 오후 1시까지 신규 진입 허용
+    "BOOST_NO_NEW_ENTRY_AFTER", "14:30"
+)  # 14:30까지 신규 진입 허용 (NO_NEW_ENTRY_AFTER와 동일 — 불장이면 더 공격적)
 BOOST_CYCLE_COOLDOWN = int(os.getenv("BOOST_CYCLE_COOLDOWN", "90"))  # 쿨다운 90초
 BOOST_HARD_FILTER_CHANGE_MAX = float(
     os.getenv("BOOST_HARD_FILTER_CHANGE_MAX", "14.0")
@@ -404,9 +402,9 @@ BOOST_TIME_STOP_MIN_PROFIT = float(
 # --- 거래대금 필터 (가격대별 차등) ---
 # 저가주는 거래대금 기준을 낮춰 아이티켐(1~2만원대) 같은 중소형 급등주도 포착
 MIN_TRADING_VALUE_TIERS = [
-    (50000, 5_000_000_000),  # 5만원 이상: 50억
-    (20000, 3_000_000_000),  # 2~5만원: 30억
-    (0, 1_000_000_000),  # 2만원 이하: 10억
+    (50000, 3_000_000_000),
+    (20000, 1_500_000_000),
+    (0, 500_000_000),
 ]
 
 COMMISSION_PCT = float(os.getenv("COMMISSION_PCT", "0.015"))
@@ -451,17 +449,16 @@ TIGHT_STOP_LOSS_PCT = float(
     os.getenv("TIGHT_STOP_LOSS_PCT", "1.2")
 )  # 기본 손절 -1.2% (기존 -2.5%에서 강화)
 TIGHT_STOP_BY_SIGNAL = [
-    ("premium", 1.5),  # VWAP+호가+수급 3중 확인 → -1.5% (숨 여유)
-    ("standard", 1.2),  # 기본 -1.2%
-    ("weak", 0.8),  # 신호 약할 때 -0.8% (빠른 탈출)
+    ("premium", 2.0),
+    ("standard", 1.5),
+    ("weak", 1.5),
 ]
 
 # --- 비대칭 수익 실현 (티어드 분할매도 — 핵심: 딸때 많이) ---
 TIERED_SELL_ENABLED = os.getenv("TIERED_SELL_ENABLED", "true").lower() == "true"
 TIERED_SELL_LEVELS = [
-    (1.5, 40),  # +1.5% 도달 → 보유량의 40% 매도 (수수료 커버 + α)
-    (3.0, 50),  # +3.0% 도달 → 남은 수량의 50% 매도
-    # 나머지 → 공격적 트레일링으로 최대 수익 추구
+    (3.0, 30),
+    (5.0, 30),
 ]
 TIERED_REMAINDER_TRAILING_PCT = float(
     os.getenv("TIERED_REMAINDER_TRAILING_PCT", "1.5")
