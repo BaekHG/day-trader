@@ -498,16 +498,15 @@ def _try_momentum_entry(
 
     early = _is_early_morning()
     boosted = _boost_state["active"]
-    if late:
-        min_score = config.LATE_SESSION_MIN_SCORE
-    elif boosted:
+    if boosted:
         min_score = config.BOOST_MOMENTUM_MIN_SCORE
+    elif late:
+        min_score = config.LATE_SESSION_MIN_SCORE
     elif early:
         min_score = config.EARLY_MOMENTUM_MIN_SCORE
     else:
         min_score = config.MOMENTUM_MIN_SCORE
-    # 손절 후 다음 진입: 최소 스코어 강화
-    if consecutive_losses > 0:
+    if consecutive_losses > 0 and not boosted:
         min_score = max(min_score, config.AFTER_LOSS_MIN_SCORE)
         logger.info(
             "손절 후 안전 모드: 최소 스코어 %d 적용 (%d연패)",
