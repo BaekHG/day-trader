@@ -16,6 +16,7 @@ import pytz
 
 import config
 from ai_analyzer import AIAnalyzer
+from buy_lock import cleanup_old_locks
 from db import Database
 from kis_client import KISClient
 from market_data import MarketDataCollector
@@ -1346,6 +1347,8 @@ def run_daily_cycle():
     logger.info("=" * 50)
     logger.info("Day Trader 시작 — %s", now_kst().strftime("%Y.%m.%d %H:%M"))
     logger.info("=" * 50)
+
+    cleanup_old_locks()
 
     kis = KISClient()
     bot = TelegramBot()

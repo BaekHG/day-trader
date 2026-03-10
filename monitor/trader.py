@@ -4,6 +4,7 @@ import logging
 
 import config
 from ai_analyzer import AIAnalyzer
+from buy_lock import claim_stock_for_buy
 from db import Database
 from kis_client import KISClient
 from telegram_bot import TelegramBot
@@ -38,15 +39,24 @@ class Trader:
         self.db = db
 
     def calculate_orders(
-        self, picks: list[dict], total_capital: int, sold_codes: set | None = None,
+        self,
+        picks: list[dict],
+        total_capital: int,
+        sold_codes: set | None = None,
         phase: str = "morning",
     ) -> list[dict]:
         sold_codes = sold_codes or set()
-        max_pos_pct = config.AFTERNOON_MAX_POSITION_PCT if phase == "afternoon" else config.MAX_POSITION_PCT
+        max_pos_pct = (
+            config.AFTERNOON_MAX_POSITION_PCT
+            if phase == "afternoon"
+            else config.MAX_POSITION_PCT
+        )
         orders = []
-        for pick in picks[:config.MAX_PICKS]:
+        for pick in picks[: config.MAX_PICKS]:
             if pick["symbol"] in sold_codes:
-                logger.info("손실종목 재진입 차단: %s (%s)", pick["name"], pick["symbol"])
+                logger.info(
+                    "손실종목 재진입 차단: %s (%s)", pick["name"], pick["symbol"]
+                )
                 continue
             alloc = min(pick.get("allocation", 0), max_pos_pct)
             if alloc <= 0:
@@ -64,20 +74,22 @@ class Trader:
             else:
                 reason_str = str(raw_reason) if raw_reason else "AI 추천 매수"
 
-            orders.append({
-                "stock_code": pick["symbol"],
-                "name": pick["name"],
-                "quantity": qty,
-                "price": entry_low,
-                "amount": qty * entry_low,
-                "allocation": alloc,
-                "target1": pick.get("target1", 0),
-                "target2": pick.get("target2", 0),
-                "stop_loss": pick.get("stopLoss", 0),
-                "sell_strategy": pick.get("sellStrategy", {}),
-                "reason": reason_str,
-                "score": pick.get("score", 0),
-            })
+            orders.append(
+                {
+                    "stock_code": pick["symbol"],
+                    "name": pick["name"],
+                    "quantity": qty,
+                    "price": entry_low,
+                    "amount": qty * entry_low,
+                    "allocation": alloc,
+                    "target1": pick.get("target1", 0),
+                    "target2": pick.get("target2", 0),
+                    "stop_loss": pick.get("stopLoss", 0),
+                    "sell_strategy": pick.get("sellStrategy", {}),
+                    "reason": reason_str,
+                    "score": pick.get("score", 0),
+                }
+            )
         max_alloc = max_pos_pct * config.MAX_PICKS
         total_alloc = sum(o["allocation"] for o in orders)
         if total_alloc > max_alloc:
@@ -92,13 +104,23 @@ class Trader:
     def execute_buy_orders(self, orders: list[dict]) -> list[dict]:
         results = []
         for order in orders:
+            if not claim_stock_for_buy(order["stock_code"]):
+                msg = "다른 봇이 이미 매수 — 중복 방지 스킵"
+                logger.info("%s %s", order["name"], msg)
+                self.bot.send_message(f"🔒 {order['name']} {msg}")
+                results.append({**order, "success": False, "message": msg})
+                continue
             try:
                 # ── 현재가 확인 및 주문가 조정 ──
                 try:
                     price_data = self.kis.get_current_price(order["stock_code"])
                     current_price = price_data["price"]
                 except Exception as e:
-                    logger.warning("%s 현재가 조회 실패 — AI 지정가 그대로 사용: %s", order["name"], e)
+                    logger.warning(
+                        "%s 현재가 조회 실패 — AI 지정가 그대로 사용: %s",
+                        order["name"],
+                        e,
+                    )
                     current_price = 0
 
                 if current_price <= 0:
@@ -109,9 +131,15 @@ class Trader:
                     continue
 
                 ai_price = order["price"]
-                deviation_pct = abs(current_price - ai_price) / ai_price * 100 if ai_price > 0 else 0
+                deviation_pct = (
+                    abs(current_price - ai_price) / ai_price * 100
+                    if ai_price > 0
+                    else 0
+                )
 
-                if current_price > ai_price * (1 + config.MAX_ENTRY_DEVIATION_PCT / 100):
+                if current_price > ai_price * (
+                    1 + config.MAX_ENTRY_DEVIATION_PCT / 100
+                ):
                     msg = (
                         f"현재가({current_price:,}) > 지정가({ai_price:,}) "
                         f"{deviation_pct:.1f}%↑ — 진입구간 이탈로 매수 스킵"
@@ -121,7 +149,9 @@ class Trader:
                     results.append({**order, "success": False, "message": msg})
                     continue
 
-                if ai_price > current_price * (1 + config.MAX_ENTRY_DEVIATION_PCT / 100):
+                if ai_price > current_price * (
+                    1 + config.MAX_ENTRY_DEVIATION_PCT / 100
+                ):
                     msg = (
                         f"지정가({ai_price:,}) > 현재가({current_price:,}) "
                         f"{deviation_pct:.1f}%↑ — 지정가 과대 괴리로 매수 스킵"
@@ -132,51 +162,78 @@ class Trader:
                     continue
 
                 if current_price != ai_price:
-                        if order.get("is_momentum"):
-                            # 모멘텀: 최신 현재가 기준 +1% 상한 지정가 유지
-                            adjusted_price = round_to_tick(int(current_price * 1.01))
-                            logger.info(
-                                "%s 모멘텀 상한지정가 갱신: %s → %s (현재가 %s +1%%)",
-                                order["name"], f"{ai_price:,}", f"{adjusted_price:,}", f"{current_price:,}",
-                            )
-                        else:
-                            adjusted_price = current_price
-                            logger.info(
-                                "%s 주문가 조정: AI %s → 현재가 %s (%.1f%%)",
-                                order["name"], f"{ai_price:,}", f"{current_price:,}", deviation_pct,
-                            )
-                        order["price"] = adjusted_price
-                        order["quantity"] = int(order["amount"] // adjusted_price) if adjusted_price > 0 else order["quantity"]
-                        if order["quantity"] < 1:
-                            results.append({**order, "success": False, "message": "현재가 기준 수량 부족"})
-                            continue
-                        order["amount"] = order["quantity"] * adjusted_price
-
-                        # 손절가도 현재가 기준으로 재계산
-                        if ai_price > 0 and order.get("stop_loss", 0) > 0:
-                            stop_pct = (ai_price - order["stop_loss"]) / ai_price
-                        else:
-                            stop_pct = 0
-                        stop_pct = max(stop_pct, config.MIN_STOP_LOSS_PCT / 100)
-                        order["stop_loss"] = int(current_price * (1 - stop_pct))
+                    if order.get("is_momentum"):
+                        # 모멘텀: 최신 현재가 기준 +1% 상한 지정가 유지
+                        adjusted_price = round_to_tick(int(current_price * 1.01))
                         logger.info(
-                            "%s 손절가 조정: → %s원 (%.1f%%)",
-                            order["name"], f"{order['stop_loss']:,}", stop_pct * 100,
+                            "%s 모멘텀 상한지정가 갱신: %s → %s (현재가 %s +1%%)",
+                            order["name"],
+                            f"{ai_price:,}",
+                            f"{adjusted_price:,}",
+                            f"{current_price:,}",
                         )
+                    else:
+                        adjusted_price = current_price
+                        logger.info(
+                            "%s 주문가 조정: AI %s → 현재가 %s (%.1f%%)",
+                            order["name"],
+                            f"{ai_price:,}",
+                            f"{current_price:,}",
+                            deviation_pct,
+                        )
+                    order["price"] = adjusted_price
+                    order["quantity"] = (
+                        int(order["amount"] // adjusted_price)
+                        if adjusted_price > 0
+                        else order["quantity"]
+                    )
+                    if order["quantity"] < 1:
+                        results.append(
+                            {
+                                **order,
+                                "success": False,
+                                "message": "현재가 기준 수량 부족",
+                            }
+                        )
+                        continue
+                    order["amount"] = order["quantity"] * adjusted_price
+
+                    # 손절가도 현재가 기준으로 재계산
+                    if ai_price > 0 and order.get("stop_loss", 0) > 0:
+                        stop_pct = (ai_price - order["stop_loss"]) / ai_price
+                    else:
+                        stop_pct = 0
+                    stop_pct = max(stop_pct, config.MIN_STOP_LOSS_PCT / 100)
+                    order["stop_loss"] = int(current_price * (1 - stop_pct))
+                    logger.info(
+                        "%s 손절가 조정: → %s원 (%.1f%%)",
+                        order["name"],
+                        f"{order['stop_loss']:,}",
+                        stop_pct * 100,
+                    )
 
                 if config.DRY_RUN:
-                    logger.info("[모의] 매수 시뮬레이션: %s %d주 × %s원", order["name"], order["quantity"], f"{order['price']:,}")
-                    results.append({
-                        **order,
-                        "success": True,
-                        "message": "[모의] 시뮬레이션 체결",
-                        "odno": "DRY_RUN",
-                        "ord_gno_brno": "DRY_RUN",
-                    })
+                    logger.info(
+                        "[모의] 매수 시뮬레이션: %s %d주 × %s원",
+                        order["name"],
+                        order["quantity"],
+                        f"{order['price']:,}",
+                    )
+                    results.append(
+                        {
+                            **order,
+                            "success": True,
+                            "message": "[모의] 시뮬레이션 체결",
+                            "odno": "DRY_RUN",
+                            "ord_gno_brno": "DRY_RUN",
+                        }
+                    )
                     continue
 
                 result = self.kis.place_buy_order(
-                    order["stock_code"], order["quantity"], order["price"],
+                    order["stock_code"],
+                    order["quantity"],
+                    order["price"],
                 )
                 rt_cd = result.get("rt_cd", "")
                 msg = result.get("msg1", "")
@@ -191,7 +248,12 @@ class Trader:
                 }
                 results.append(order_info)
                 if success:
-                    logger.info("매수 주문 성공: %s %d주 × %s원", order["name"], order["quantity"], f"{order['price']:,}")
+                    logger.info(
+                        "매수 주문 성공: %s %d주 × %s원",
+                        order["name"],
+                        order["quantity"],
+                        f"{order['price']:,}",
+                    )
                     if self.db:
                         self.db.save_trade(
                             stock_code=order["stock_code"],
@@ -219,19 +281,25 @@ class Trader:
                 logger.warning("주문번호 누락 — 취소 불가: %s", order.get("name", "?"))
                 continue
             try:
-                result = self.kis.cancel_order(ord_gno_brno, odno, order["remaining_qty"])
+                result = self.kis.cancel_order(
+                    ord_gno_brno, odno, order["remaining_qty"]
+                )
                 success = result.get("rt_cd", "") == "0"
                 if success:
                     logger.info("주문 취소 성공: %s (ODNO: %s)", order["name"], odno)
                     cancelled.append(order)
                 else:
-                    logger.error("주문 취소 실패: %s — %s", order["name"], result.get("msg1", ""))
+                    logger.error(
+                        "주문 취소 실패: %s — %s", order["name"], result.get("msg1", "")
+                    )
             except Exception as e:
                 logger.error("주문 취소 오류: %s — %s", order["name"], e)
         return cancelled
 
     def retry_with_reanalysis(
-        self, cancelled_orders: list[dict], analyzer: AIAnalyzer,
+        self,
+        cancelled_orders: list[dict],
+        analyzer: AIAnalyzer,
     ) -> list[dict]:
         retry_results = []
         for order in cancelled_orders:
@@ -262,7 +330,9 @@ class Trader:
                     retry_results.append({**order, "retried": False, "reason": reason})
                     continue
 
-                suggested_price = round_to_tick(int(reanalysis.get("suggested_price", current_price)))
+                suggested_price = round_to_tick(
+                    int(reanalysis.get("suggested_price", current_price))
+                )
                 qty = order["remaining_qty"]
 
                 result = self.kis.place_buy_order(code, qty, suggested_price)
@@ -271,7 +341,9 @@ class Trader:
                 msg_text = result.get("msg1", "")
 
                 if success:
-                    logger.info("재주문 성공: %s %d주 × %s원", name, qty, f"{suggested_price:,}")
+                    logger.info(
+                        "재주문 성공: %s %d주 × %s원", name, qty, f"{suggested_price:,}"
+                    )
                     self.bot.send_message(
                         f"🔄 {name} 재주문 성공\n"
                         f"현재가 매수: {qty}주 × {suggested_price:,}원\n"
@@ -279,23 +351,28 @@ class Trader:
                     )
                     if self.db:
                         self.db.save_trade(
-                            stock_code=code, stock_name=name,
-                            action="buy", quantity=qty, price=suggested_price,
+                            stock_code=code,
+                            stock_name=name,
+                            action="buy",
+                            quantity=qty,
+                            price=suggested_price,
                             reason=f"재분석 매수: {reason}",
                         )
                 else:
                     logger.error("재주문 실패: %s — %s", name, msg_text)
                     self.bot.send_message(f"⚠️ {name} 재주문 실패: {msg_text}")
 
-                retry_results.append({
-                    **order,
-                    "retried": True,
-                    "success": success,
-                    "retry_price": suggested_price,
-                    "odno": output.get("ODNO", ""),
-                    "ord_gno_brno": output.get("KRX_FWDG_ORD_ORGNO", ""),
-                    "reason": reason,
-                })
+                retry_results.append(
+                    {
+                        **order,
+                        "retried": True,
+                        "success": success,
+                        "retry_price": suggested_price,
+                        "odno": output.get("ODNO", ""),
+                        "ord_gno_brno": output.get("KRX_FWDG_ORD_ORGNO", ""),
+                        "reason": reason,
+                    }
+                )
             except Exception as e:
                 logger.error("재분석/재주문 오류: %s — %s", name, e)
                 self.bot.send_message(f"⚠️ {name} 재분석 오류: {e}")
@@ -304,13 +381,16 @@ class Trader:
 
     def check_fills(self, orders: list[dict]) -> list[dict]:
         if config.DRY_RUN:
-            return [{
-                "stock_code": o["stock_code"],
-                "name": o["name"],
-                "quantity": o["quantity"],
-                "price": o["price"],
-                "amount": o["quantity"] * o["price"],
-            } for o in orders]
+            return [
+                {
+                    "stock_code": o["stock_code"],
+                    "name": o["name"],
+                    "quantity": o["quantity"],
+                    "price": o["price"],
+                    "amount": o["quantity"] * o["price"],
+                }
+                for o in orders
+            ]
         try:
             fills_raw = self.kis.get_order_fills(sll_buy_dvsn="02")
         except Exception as e:
