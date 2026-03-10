@@ -805,6 +805,98 @@ class PositionMonitor:
         except (FileNotFoundError, json.JSONDecodeError):
             self.trades_today = []
 
+    def sync_trades_with_kis(self) -> int:
+        """KIS 체결내역으로 trades_today 동기화 — 재시작 시 누락 거래 복구."""
+        if config.DRY_RUN:
+            return 0
+        try:
+            sell_fills = self.kis.get_order_fills(sll_buy_dvsn="01")
+            buy_fills = self.kis.get_order_fills(sll_buy_dvsn="02")
+        except Exception as e:
+            logger.warning("KIS 체결내역 조회 실패 — 거래 동기화 스킵: %s", e)
+            return 0
+
+        recorded_sell_qty = {}
+        for t in self.trades_today:
+            code = t.get("code", "")
+            recorded_sell_qty[code] = recorded_sell_qty.get(code, 0) + t.get("qty", 0)
+
+        buy_agg = {}
+        for f in buy_fills:
+            code = f["stock_code"]
+            if code not in buy_agg:
+                buy_agg[code] = {"amt": 0, "qty": 0}
+            buy_agg[code]["amt"] += f["amount"]
+            buy_agg[code]["qty"] += f["quantity"]
+
+        sell_agg = {}
+        for f in sell_fills:
+            code = f["stock_code"]
+            if code not in sell_agg:
+                sell_agg[code] = {"amt": 0, "qty": 0, "name": f["name"]}
+            sell_agg[code]["amt"] += f["amount"]
+            sell_agg[code]["qty"] += f["quantity"]
+
+        recovered = 0
+        for code, sell_info in sell_agg.items():
+            kis_qty = sell_info["qty"]
+            rec_qty = recorded_sell_qty.get(code, 0)
+            if rec_qty >= kis_qty:
+                continue
+
+            missing_qty = kis_qty - rec_qty
+            sell_avg = sell_info["amt"] // kis_qty if kis_qty else 0
+            buy_info = buy_agg.get(code, {})
+            buy_avg = (
+                buy_info["amt"] // buy_info["qty"] if buy_info.get("qty") else sell_avg
+            )
+
+            gross = (sell_avg - buy_avg) * missing_qty
+            fee = int(
+                buy_avg * missing_qty * config.COMMISSION_PCT / 100
+                + sell_avg * missing_qty * config.COMMISSION_PCT / 100
+            )
+            tax = int(sell_avg * missing_qty * config.TAX_PCT / 100)
+            pnl_amt = gross - fee - tax
+            pnl_pct = (
+                pnl_amt / (buy_avg * missing_qty) * 100
+                if buy_avg and missing_qty
+                else 0
+            )
+
+            self.trades_today.append(
+                {
+                    "code": code,
+                    "name": sell_info["name"],
+                    "qty": missing_qty,
+                    "entry": buy_avg,
+                    "exit": sell_avg,
+                    "pnl_amt": pnl_amt,
+                    "pnl_pct": round(pnl_pct, 1),
+                    "reason": "KIS 동기화 복구",
+                    "exit_type": "recovered",
+                    "hold_minutes": 0,
+                    "high_water_mark_pct": 0,
+                    "buy_slippage_pct": 0,
+                    "score": 0,
+                    "phase": "recovered",
+                }
+            )
+            recovered += 1
+            logger.info(
+                "거래 복구: %s %d주 (매수 %s → 매도 %s, 손익 %s원)",
+                sell_info["name"],
+                missing_qty,
+                f"{buy_avg:,}",
+                f"{sell_avg:,}",
+                f"{pnl_amt:,}",
+            )
+
+        if recovered:
+            self._save_trades_today()
+            logger.info("KIS 체결 동기화 — %d건 복구", recovered)
+        return recovered
+
     def sync_with_balance(self) -> dict:
         """KIS 실잔고를 source of truth로 하여 positions.json 동기화."""
         if config.DRY_RUN:

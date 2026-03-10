@@ -1381,6 +1381,13 @@ def run_daily_cycle():
                 lines.append(f"  🔄 {u['name']} {u['old']}주→{u['new']}주 (KIS 기준)")
             bot.send_message("\n".join(lines))
 
+        recovered = monitor.sync_trades_with_kis()
+        if recovered:
+            bot.send_message(
+                f"🔄 KIS 체결 동기화 — {recovered}건 누락 거래 복구\n"
+                f"현재 trades_today: {len(monitor.trades_today)}건"
+            )
+
     bot.start_polling(kis, monitor)
 
     if is_weekend() and not config.DRY_RUN:
