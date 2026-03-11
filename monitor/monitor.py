@@ -269,7 +269,16 @@ class PositionMonitor:
                     continue
 
             # === Step 5: 티어드 분할매도 ===
-            if config.TIERED_SELL_ENABLED:
+            # 장 초반 모멘텀 보호: grace period 내에는 분할매도 유예
+            grace_minutes = getattr(config, "MOMENTUM_HOLD_GRACE_MINUTES", 0)
+            in_grace = is_momentum and hold_minutes < grace_minutes and pnl_pct > 0
+            if in_grace:
+                logger.info(
+                    "%s 모멘텀 보호 중 (%.0f/%.0f분, +%.1f%%) — 분할매도 유예",
+                    pos["name"], hold_minutes, grace_minutes, pnl_pct,
+                )
+
+            if config.TIERED_SELL_ENABLED and not in_grace:
                 tiered_done = pos.get("tiered_sells_done", [False, False])
                 for tier_idx, (target_pct, sell_pct) in enumerate(
                     config.TIERED_SELL_LEVELS
@@ -357,24 +366,31 @@ class PositionMonitor:
                     logger.warning("수급 반전 체크 실패 %s: %s", pos["name"], e)
 
             # === Step 8: 잔여분 트레일링 (티어드 모두 완료 후) ===
+            # grace period 중에는 수익 트레일링도 유예 (손절은 Step 3에서 처리)
             all_tiers_done = all(pos.get("tiered_sells_done", [False]))
             if config.TIERED_SELL_ENABLED and all_tiers_done and remaining > 0:
-                peak = pos.get("peak_price", pos["high_since_entry"])
-                trail_stop = int(
-                    peak * (1 - config.TIERED_REMAINDER_TRAILING_PCT / 100)
-                )
-                if current <= trail_stop:
-                    self._execute_sell(
-                        code,
-                        pos,
-                        remaining,
-                        current,
-                        f"잔여분 트레일링 (고점 {peak:,} → -{config.TIERED_REMAINDER_TRAILING_PCT}%)",
-                        pnl_pct,
+                if in_grace:
+                    logger.info(
+                        "%s 모멘텀 보호 — 잔여분 트레일링 유예 (%.0f분)",
+                        pos["name"], hold_minutes,
                     )
-                    continue
-            elif not config.TIERED_SELL_ENABLED:
-                # 티어드 비활성 시 기존 트레일링 유지
+                else:
+                    peak = pos.get("peak_price", pos["high_since_entry"])
+                    trail_stop = int(
+                        peak * (1 - config.TIERED_REMAINDER_TRAILING_PCT / 100)
+                    )
+                    if current <= trail_stop:
+                        self._execute_sell(
+                            code,
+                            pos,
+                            remaining,
+                            current,
+                            f"잔여분 트레일링 (고점 {peak:,} → -{config.TIERED_REMAINDER_TRAILING_PCT}%)",
+                            pnl_pct,
+                        )
+                        continue
+            elif not config.TIERED_SELL_ENABLED and not in_grace:
+                # 티어드 비활성 시 기존 트레일링 유지 (grace 중 수익 트레일링 유예)
                 _boosted = False
                 try:
                     import main as _main_mod

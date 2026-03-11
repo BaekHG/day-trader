@@ -476,12 +476,16 @@ TIGHT_STOP_BY_SIGNAL = [
 # --- 비대칭 수익 실현 (티어드 분할매도 — 핵심: 딸때 많이) ---
 TIERED_SELL_ENABLED = os.getenv("TIERED_SELL_ENABLED", "true").lower() == "true"
 TIERED_SELL_LEVELS = [
-    (3.0, 30),
-    (5.0, 30),
+    (5.0, 25),   # +5%에서 25% 매도 (3→5%: 조기 익절 방지)
+    (8.0, 25),   # +8%에서 25% 매도 (5→8%: 강한 모멘텀 존중)
 ]
 TIERED_REMAINDER_TRAILING_PCT = float(
-    os.getenv("TIERED_REMAINDER_TRAILING_PCT", "1.5")
-)  # 분할매도 후 잔여분: 고점 대비 -1.5%에서 매도
+    os.getenv("TIERED_REMAINDER_TRAILING_PCT", "3.0")
+)  # 분할매도 후 잔여분: 고점 대비 -3%에서 매도 (1.5→3%: 눌림 허용)
+# 장 초반 모멘텀 보호: 진입 후 최소 N분간 티어드/트레일링 매도 유예
+MOMENTUM_HOLD_GRACE_MINUTES = int(
+    os.getenv("MOMENTUM_HOLD_GRACE_MINUTES", "10")
+)  # 진입 후 10분간 분할매도 유예 (강한 초기 모멘텀 보호)
 
 # --- 시간 정지 (강화) ---
 TIME_STOP_FLAT_MINUTES = int(
