@@ -1502,6 +1502,116 @@ def _should_run_afternoon(monitor: PositionMonitor) -> bool:
     return True
 
 
+def _try_pyramid(
+    kis: KISClient,
+    bot: TelegramBot,
+    trader: Trader,
+    monitor: PositionMonitor,
+) -> bool:
+    """수익 중인 보유 종목 추가매수 (피라미딩). 추가매수 시 True 반환."""
+    if not config.PYRAMID_ENABLED:
+        return False
+
+    try:
+        available_cash = kis.get_available_cash()
+    except Exception:
+        return False
+
+    if available_cash < config.MIN_REINVEST_CASH:
+        return False
+
+    for code, pos in list(monitor.positions.items()):
+        if pos.get("manual") or pos.get("is_crash_inverse"):
+            continue
+
+        pyramid_count = pos.get("pyramid_count", 0)
+        if pyramid_count >= config.PYRAMID_MAX_ADDS:
+            continue
+
+        try:
+            price_data = kis.get_current_price(code)
+            current = price_data["price"]
+        except Exception:
+            continue
+
+        entry = pos["entry_price"]
+        if entry <= 0:
+            continue
+        pnl_pct = (current - entry) / entry * 100
+
+        if pnl_pct < config.PYRAMID_MIN_PROFIT_PCT:
+            continue
+
+        # 모멘텀 확인: 현재가가 직전 고점 대비 -1% 이내 (상승 중)
+        if config.PYRAMID_MOMENTUM_CHECK:
+            high = pos.get("high_since_entry", entry)
+            if high > 0 and current < high * 0.99:
+                logger.info(
+                    "피라미딩 스킵 %s — 고점 대비 하락 중 (현재 %s, 고점 %s)",
+                    pos["name"], f"{current:,}", f"{high:,}",
+                )
+                continue
+
+        # 추가매수 실행
+        position_cash = int(available_cash * config.PYRAMID_POSITION_PCT / 100)
+        order_price = round_to_tick(int(current * 1.01))
+        quantity = position_cash // order_price
+        if quantity <= 0:
+            continue
+
+        stop_loss = pos["stop_loss"]  # 기존 손절선 유지
+
+        bot.send_message(
+            f"📈 <b>{pos['name']} 피라미딩 추가매수</b>\n\n"
+            f"현재 수익: {pnl_pct:+.1f}%\n"
+            f"기존: {pos['remaining_qty']}주 @ {entry:,}원\n"
+            f"추가: {quantity}주 @ {order_price:,}원 ({position_cash:,}원)\n"
+            f"피라미딩 {pyramid_count + 1}/{config.PYRAMID_MAX_ADDS}차"
+        )
+
+        order = {
+            "stock_code": code,
+            "name": pos["name"],
+            "price": order_price,
+            "quantity": quantity,
+            "stop_loss": stop_loss,
+            "reason": f"피라미딩 {pyramid_count + 1}차 (+{pnl_pct:.1f}%)",
+        }
+
+        fills = trader.execute_buy_orders([order])
+        if not fills:
+            bot.send_message(f"⚠️ {pos['name']} 피라미딩 매수 실패")
+            continue
+
+        for f in fills:
+            fill_price = f["avg_price"]
+            # 평균 단가 + 수량 업데이트 (add_position이 자동 처리)
+            monitor.add_position(
+                stock_code=f["stock_code"],
+                name=f["name"],
+                quantity=f["quantity"],
+                entry_price=fill_price,
+                target1=0,
+                target2=0,
+                stop_loss=stop_loss,
+                phase="pyramid",
+            )
+            # 피라미딩 횟수 기록
+            if f["stock_code"] in monitor.positions:
+                monitor.positions[f["stock_code"]]["pyramid_count"] = pyramid_count + 1
+                monitor.positions[f["stock_code"]].setdefault("is_momentum", True)
+
+            bot.send_message(
+                f"✅ <b>{f['name']} 피라미딩 체결</b>\n\n"
+                f"체결: {fill_price:,}원 × {f['quantity']}주\n"
+                f"총 보유: {monitor.positions.get(f['stock_code'], {}).get('remaining_qty', 0)}주"
+            )
+
+        return True  # 한 종목만 피라미딩 (리스크 관리)
+
+    return False
+
+
 def _try_reinvest(
     kis: KISClient,
     bot: TelegramBot,
@@ -1515,6 +1625,11 @@ def _try_reinvest(
     cutoff_fn = _past_afternoon_cutoff if phase == "afternoon" else _past_entry_cutoff
     if cutoff_fn():
         return
+
+    # 수익 종목 피라미딩 우선 시도
+    if _try_pyramid(kis, bot, trader, monitor):
+        return  # 피라미딩 했으면 이번 턴은 끝
+
     try:
         remaining_cash = kis.get_available_cash()
     except Exception as e:
