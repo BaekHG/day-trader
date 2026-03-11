@@ -168,39 +168,35 @@ class PositionMonitor:
                 now.hour == force_hh and now.minute >= force_mm
             )
             if is_final:
-                # 15:20 — 오버나이트 조건 충족 시 홀딩, 아니면 전량 청산
-                if (
-                    config.OVERNIGHT_ENABLED
-                    and pnl_pct >= config.OVERNIGHT_MIN_PROFIT_PCT
-                ):
+                # 15:20 — 수익 종목은 무조건 오버나이트, 손실만 청산
+                if pnl_pct > 0:
+                    pos["overnight"] = True
+                    pos["overnight_close_price"] = current
+                    self._save_positions()
                     high_ratio = (
                         current / pos["high_since_entry"]
                         if pos.get("high_since_entry", 0) > 0
-                        else 0
+                        else 1.0
                     )
-                    if high_ratio >= config.OVERNIGHT_MIN_HIGH_RATIO:
-                        pos["overnight"] = True
-                        pos["overnight_close_price"] = current
-                        self._save_positions()
-                        logger.info(
-                            "%s 오버나이트 홀딩 — 수익 %.1f%%, 고점비 %.1f%%",
-                            pos["name"],
-                            pnl_pct,
-                            high_ratio * 100,
-                        )
-                        self.bot.send_message(
-                            f"🌙 <b>{pos['name']} 오버나이트 홀딩</b>\n\n"
-                            f"수익: {pnl_pct:+.1f}% ({current:,}원)\n"
-                            f"고점비: {high_ratio * 100:.1f}%\n"
-                            f"내일 {config.OVERNIGHT_MORNING_CHECK} 갭 체크 예정"
-                        )
-                        continue
+                    logger.info(
+                        "%s 오버나이트 홀딩 — 수익 %.1f%%, 고점비 %.1f%%",
+                        pos["name"],
+                        pnl_pct,
+                        high_ratio * 100,
+                    )
+                    self.bot.send_message(
+                        f"🌙 <b>{pos['name']} 오버나이트 홀딩</b>\n\n"
+                        f"수익: {pnl_pct:+.1f}% ({current:,}원)\n"
+                        f"고점비: {high_ratio * 100:.1f}%\n"
+                        f"내일 {config.OVERNIGHT_MORNING_CHECK} 갭 체크 예정"
+                    )
+                    continue
                 self._execute_sell(
                     code,
                     pos,
                     remaining,
                     current,
-                    f"{config.FINAL_CLOSE_TIME} 전량 강제 청산",
+                    f"{config.FINAL_CLOSE_TIME} 손실 종목 장마감 청산",
                     pnl_pct,
                 )
                 continue
@@ -275,7 +271,10 @@ class PositionMonitor:
             if in_grace:
                 logger.info(
                     "%s 모멘텀 보호 중 (%.0f/%.0f분, +%.1f%%) — 분할매도 유예",
-                    pos["name"], hold_minutes, grace_minutes, pnl_pct,
+                    pos["name"],
+                    hold_minutes,
+                    grace_minutes,
+                    pnl_pct,
                 )
 
             if config.TIERED_SELL_ENABLED and not in_grace:
@@ -372,7 +371,8 @@ class PositionMonitor:
                 if in_grace:
                     logger.info(
                         "%s 모멘텀 보호 — 잔여분 트레일링 유예 (%.0f분)",
-                        pos["name"], hold_minutes,
+                        pos["name"],
+                        hold_minutes,
                     )
                 else:
                     peak = pos.get("peak_price", pos["high_since_entry"])
