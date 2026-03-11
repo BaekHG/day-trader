@@ -148,6 +148,13 @@ AFTER_LOSS_MIN_SCORE = int(
 MIN_REINVEST_CASH = int(os.getenv("MIN_REINVEST_CASH", "200000"))
 REINVEST_CHECK_INTERVAL = int(os.getenv("REINVEST_CHECK_INTERVAL", "300"))
 
+# --- 수익 종목 추가매수 (피라미딩) ---
+PYRAMID_ENABLED = os.getenv("PYRAMID_ENABLED", "true").lower() == "true"
+PYRAMID_MIN_PROFIT_PCT = float(os.getenv("PYRAMID_MIN_PROFIT_PCT", "3.0"))  # 최소 수익률
+PYRAMID_POSITION_PCT = int(os.getenv("PYRAMID_POSITION_PCT", "50"))  # 추가매수 비중 (잔여 현금 대비)
+PYRAMID_MAX_ADDS = int(os.getenv("PYRAMID_MAX_ADDS", "2"))  # 종목당 최대 추가매수 횟수
+PYRAMID_MOMENTUM_CHECK = os.getenv("PYRAMID_MOMENTUM_CHECK", "true").lower() == "true"  # 상승 모멘텀 확인
+
 # --- 포지션 사이징 ---
 MAX_PICKS = int(os.getenv("MAX_PICKS", "1"))  # 최대 동시 보유 종목 수
 MAX_POSITION_PCT = int(
@@ -261,11 +268,13 @@ MOMENTUM_VOL_GATE = float(
 
 # 모멘텀 트레일링 스톱 (공격적 — 큰 수익 추구, +5% 전에는 트레일링 없음)
 MOMENTUM_TRAILING_STOP_LEVELS = [
+    (25.0, 20.0),  # +25% 도달 → +20% 확보 (5% 숨 여유)
+    (20.0, 15.0),  # +20% 도달 → +15% 확보 (5% 숨 여유)
     (15.0, 11.0),  # +15% 도달 → +11% 확보 (4% 숨 여유)
-    (10.0, 7.0),  # +10% 도달 → +7.0% 확보 (3% 숨 여유)
-    (7.0, 4.0),  # +7%  도달 → +4.0% 확보 (3% 숨 여유)
-    (5.0, 2.0),  # +5%  도달 → +2.0% 확보 (3% 숨 여유)
-    # +5% 미만: 트레일링 없음 → 초기 손절(-2.5%)로만 관리
+    (10.0, 6.0),  # +10% 도달 → +6.0% 확보 (4% 숨 여유) — 눌림 허용 넓힘
+    (7.0, 3.5),  # +7%  도달 → +3.5% 확보 (3.5% 숨 여유)
+    (5.0, 1.5),  # +5%  도달 → +1.5% 확보 (3.5% 숨 여유)
+    # +5% 미만: 트레일링 없음 → 초기 손절로만 관리
 ]
 
 # --- 단계적 매도 (슬리피지 방지) ---
@@ -343,6 +352,16 @@ CRASH_TRAILING_STOP_LEVELS = [
     (1.5, 0.3),
 ]
 
+# --- 크래시 센티널 (장중 상시 감시) ---
+CRASH_SENTINEL_INTERVAL = int(os.getenv("CRASH_SENTINEL_INTERVAL", "60"))  # 초
+CRASH_VELOCITY_WINDOW = int(os.getenv("CRASH_VELOCITY_WINDOW", "30"))  # 분
+CRASH_VELOCITY_THRESHOLD = float(os.getenv("CRASH_VELOCITY_THRESHOLD", "-1.5"))  # N분내 하락폭
+CRASH_STAGE2_THRESHOLD = float(os.getenv("CRASH_STAGE2_THRESHOLD", "-5.0"))  # 2차 진입 임계
+CRASH_STAGE1_POSITION_PCT = int(os.getenv("CRASH_STAGE1_POSITION_PCT", "50"))  # 1차 비중
+CRASH_STAGE2_POSITION_PCT = int(os.getenv("CRASH_STAGE2_POSITION_PCT", "50"))  # 2차 비중
+CRASH_FORCE_EXIT_TIME = os.getenv("CRASH_FORCE_EXIT_TIME", "15:10")  # 당일 강제 청산
+CRASH_MAX_ENTRIES_PER_DAY = int(os.getenv("CRASH_MAX_ENTRIES_PER_DAY", "2"))  # 일일 최대
+CRASH_RECOVERY_EXIT_PCT = float(os.getenv("CRASH_RECOVERY_EXIT_PCT", "50"))  # 지수 반등 시 청산 (하락폭 N% 회복)
 
 # --- 불장 모드 (Market Boost) — 시장 강세/호재 뉴스 감지 시 공격적 파라미터 ---
 BOOST_ENABLED = os.getenv("BOOST_ENABLED", "true").lower() == "true"
@@ -457,12 +476,16 @@ TIGHT_STOP_BY_SIGNAL = [
 # --- 비대칭 수익 실현 (티어드 분할매도 — 핵심: 딸때 많이) ---
 TIERED_SELL_ENABLED = os.getenv("TIERED_SELL_ENABLED", "true").lower() == "true"
 TIERED_SELL_LEVELS = [
-    (3.0, 30),
-    (5.0, 30),
+    (5.0, 25),   # +5%에서 25% 매도 (3→5%: 조기 익절 방지)
+    (8.0, 25),   # +8%에서 25% 매도 (5→8%: 강한 모멘텀 존중)
 ]
 TIERED_REMAINDER_TRAILING_PCT = float(
-    os.getenv("TIERED_REMAINDER_TRAILING_PCT", "1.5")
-)  # 분할매도 후 잔여분: 고점 대비 -1.5%에서 매도
+    os.getenv("TIERED_REMAINDER_TRAILING_PCT", "3.0")
+)  # 분할매도 후 잔여분: 고점 대비 -3%에서 매도 (1.5→3%: 눌림 허용)
+# 장 초반 모멘텀 보호: 진입 후 최소 N분간 티어드/트레일링 매도 유예
+MOMENTUM_HOLD_GRACE_MINUTES = int(
+    os.getenv("MOMENTUM_HOLD_GRACE_MINUTES", "10")
+)  # 진입 후 10분간 분할매도 유예 (강한 초기 모멘텀 보호)
 
 # --- 시간 정지 (강화) ---
 TIME_STOP_FLAT_MINUTES = int(
@@ -482,6 +505,6 @@ TIME_STOP_LOSING_MINUTES = 0  # 비활성화
 # weak: 1개 이하 → 좁은 손절, 작은 포지션
 ENTRY_QUALITY_POSITION_SCALE = {
     "premium": 1.0,  # 풀 포지션 (MAX_POSITION_PCT 그대로)
-    "standard": 0.7,  # 70%
+    "standard": 0.85,  # 85% — 기본 진입도 적극적으로
     "weak": 0.5,  # 50%
 }

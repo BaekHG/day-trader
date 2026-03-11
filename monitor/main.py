@@ -275,6 +275,315 @@ _boost_state = {
     "reason": "",
 }
 
+# --- 크래시 센티널 상태 ---
+_crash_db_ref: Database | None = None  # run_daily_cycle()에서 설정
+
+_crash_sentinel_state = {
+    "entries_today": 0,       # 오늘 인버스 진입 횟수
+    "stage": 0,               # 0=대기, 1=1차진입완료, 2=2차진입완료
+    "kosdaq_history": [],     # [(timestamp, change_rate), ...] 속도 감지용
+    "last_check": 0,          # 마지막 체크 시각 (unix)
+    "triggered_today": False, # 오늘 크래시 발동 여부
+    "entry_kosdaq_level": 0,  # 진입 시점 KOSDAQ 등락률
+}
+
+
+def _crash_sentinel_check(
+    kis: KISClient,
+    bot: TelegramBot,
+    collector: MarketDataCollector,
+    trader: Trader,
+    monitor: PositionMonitor,
+    db: Database,
+) -> bool:
+    """장중 상시 크래시 감시. 진입 발생 시 True 반환."""
+    if not config.CRASH_MODE_ENABLED:
+        return False
+    if config.DRY_RUN:
+        return False
+
+    now = time.time()
+    if now - _crash_sentinel_state["last_check"] < config.CRASH_SENTINEL_INTERVAL:
+        return False
+    _crash_sentinel_state["last_check"] = now
+
+    n = now_kst()
+    # 09:05 ~ 15:00 사이에만 감시 (장 초반 변동성 회피 + 마감 전 진입 방지)
+    if n.hour < 9 or (n.hour == 9 and n.minute < 5):
+        return False
+    if n.hour >= 15:
+        return False
+
+    # 이미 최대 진입 도달
+    if _crash_sentinel_state["entries_today"] >= config.CRASH_MAX_ENTRIES_PER_DAY:
+        return False
+
+    # KOSDAQ 지수 조회
+    try:
+        kosdaq = kis.get_kosdaq_index()
+        kosdaq_change = float(kosdaq.get("change_rate", "0"))
+    except Exception as e:
+        logger.warning("크래시 센티널 KOSDAQ 조회 실패: %s", e)
+        return False
+
+    # 속도 감지용 히스토리 기록
+    ts = n.timestamp()
+    _crash_sentinel_state["kosdaq_history"].append((ts, kosdaq_change))
+    # 윈도우 외 데이터 제거
+    window_start = ts - config.CRASH_VELOCITY_WINDOW * 60
+    _crash_sentinel_state["kosdaq_history"] = [
+        (t, v) for t, v in _crash_sentinel_state["kosdaq_history"] if t >= window_start
+    ]
+
+    # --- 크래시 판정 ---
+    stage = _crash_sentinel_state["stage"]
+    should_enter = False
+    entry_reason = ""
+
+    # 1차 진입: KOSDAQ <= threshold (-3%) 또는 속도 급락
+    if stage == 0:
+        # 레벨 기반
+        if kosdaq_change <= config.CRASH_MODE_THRESHOLD:
+            should_enter = True
+            entry_reason = f"KOSDAQ {kosdaq_change:+.1f}% (임계 {config.CRASH_MODE_THRESHOLD}%)"
+        # 속도 기반: 윈도우 내 급락
+        elif len(_crash_sentinel_state["kosdaq_history"]) >= 2:
+            oldest_in_window = _crash_sentinel_state["kosdaq_history"][0]
+            velocity = kosdaq_change - oldest_in_window[1]
+            if velocity <= config.CRASH_VELOCITY_THRESHOLD:
+                should_enter = True
+                window_min = (ts - oldest_in_window[0]) / 60
+                entry_reason = (
+                    f"KOSDAQ 급락 감지: {oldest_in_window[1]:+.1f}% → {kosdaq_change:+.1f}% "
+                    f"({window_min:.0f}분간 {velocity:+.1f}%)"
+                )
+
+    # 2차 진입: 더 깊은 폭락 시 추가 진입
+    elif stage == 1 and kosdaq_change <= config.CRASH_STAGE2_THRESHOLD:
+        should_enter = True
+        entry_reason = f"KOSDAQ 폭락 심화 {kosdaq_change:+.1f}% (2차 임계 {config.CRASH_STAGE2_THRESHOLD}%)"
+
+    if not should_enter:
+        return False
+
+    # --- 인버스 ETF 진입 실행 ---
+    return _execute_crash_entry(
+        kis, bot, collector, trader, monitor, db, kosdaq_change, entry_reason
+    )
+
+
+def _execute_crash_entry(
+    kis: KISClient,
+    bot: TelegramBot,
+    collector: MarketDataCollector,
+    trader: Trader,
+    monitor: PositionMonitor,
+    db: Database,
+    kosdaq_change: float,
+    entry_reason: str,
+) -> bool:
+    """인버스 ETF 매수 실행. 성공 시 True."""
+    stage = _crash_sentinel_state["stage"]
+
+    try:
+        crash_candidates = collector.fetch_crash_inverse_candidates()
+    except Exception as e:
+        logger.warning("크래시 인버스 소싱 실패: %s", e)
+        return False
+
+    if not crash_candidates:
+        logger.info("크래시 센티널 — 인버스 후보 없음")
+        return False
+
+    top = crash_candidates[0]
+    code = top["mksc_shrn_iscd"]
+    name = top["hts_kor_isnm"]
+    change_pct = float(top.get("prdy_ctrt", 0))
+    m_score = top.get("momentum_score", 0)
+    cur_price = int(top.get("stck_prpr", 0))
+
+    if cur_price <= 0:
+        return False
+
+    # 이미 같은 종목 보유 중이면 해당 종목에 추가
+    existing_inverse = None
+    for c, p in monitor.positions.items():
+        if p.get("is_crash_inverse") and c == code:
+            existing_inverse = p
+            break
+
+    # 포지션 크기 결정
+    pos_pct = (
+        config.CRASH_STAGE2_POSITION_PCT if stage >= 1
+        else config.CRASH_STAGE1_POSITION_PCT
+    )
+
+    try:
+        available_cash = kis.get_available_cash()
+    except Exception:
+        logger.warning("크래시 진입 — 예수금 조회 실패")
+        return False
+
+    position_cash = int(available_cash * pos_pct / 100)
+    order_price = round_to_tick(int(cur_price * 1.01))
+    quantity = position_cash // order_price
+    if quantity <= 0:
+        logger.info("크래시 진입 — 수량 0주 (잔고 부족)")
+        return False
+
+    stop_loss = int(cur_price * (1 - config.CRASH_STOP_LOSS_PCT / 100))
+
+    stage_label = "2차 추가" if stage >= 1 else "1차"
+    bot.send_message(
+        f"📉 <b>크래시 센티널 — 인버스 {stage_label} 진입</b>\n\n"
+        f"📊 {entry_reason}\n"
+        f"종목: {name} ({code})\n"
+        f"등락률: {change_pct:+.1f}% | 스코어: {m_score:.1f}\n"
+        f"주문: {order_price:,}원 × {quantity}주 ({position_cash:,}원)\n"
+        f"손절: {stop_loss:,}원 (-{config.CRASH_STOP_LOSS_PCT}%)"
+    )
+
+    order = {
+        "stock_code": code,
+        "name": name,
+        "price": order_price,
+        "quantity": quantity,
+        "stop_loss": stop_loss,
+        "reason": f"크래시 인버스 {stage_label} ({entry_reason})",
+    }
+
+    fills = trader.execute_buy_orders([order])
+    if not fills:
+        bot.send_message(f"⚠️ {name} 크래시 인버스 매수 실패")
+        return False
+
+    for f in fills:
+        fill_price = f["avg_price"]
+        adjusted_stop = int(fill_price * (1 - config.CRASH_STOP_LOSS_PCT / 100))
+        monitor.add_position(
+            stock_code=f["stock_code"],
+            name=f["name"],
+            quantity=f["quantity"],
+            entry_price=fill_price,
+            target1=0,
+            target2=0,
+            stop_loss=adjusted_stop,
+            phase="crash_inverse",
+        )
+        monitor.positions[f["stock_code"]]["is_crash_inverse"] = True
+        if db:
+            db.save_trade(
+                f["stock_code"], f["name"], "buy", f["quantity"], fill_price,
+                reason=f"크래시 인버스 {stage_label}",
+            )
+
+        # 체결 확인 메시지
+        slip = fill_price - cur_price
+        bot.send_message(
+            f"✅ <b>{f['name']} 크래시 인버스 체결</b>\n\n"
+            f"체결가: {fill_price:,}원 × {f['quantity']}주\n"
+            f"슬리피지: {slip:+,}원\n"
+            f"손절선: {adjusted_stop:,}원"
+        )
+
+    # 상태 업데이트
+    _crash_sentinel_state["entries_today"] += 1
+    _crash_sentinel_state["stage"] = stage + 1
+    _crash_sentinel_state["triggered_today"] = True
+    _crash_sentinel_state["entry_kosdaq_level"] = kosdaq_change
+
+    logger.info(
+        "크래시 센티널 %s 진입 완료: %s (KOSDAQ %+.1f%%)",
+        stage_label, name, kosdaq_change,
+    )
+    return True
+
+
+def _crash_force_exit_check(
+    kis: KISClient,
+    bot: TelegramBot,
+    monitor: PositionMonitor,
+    db: Database,
+):
+    """인버스 포지션 강제 청산 (장 마감 전 + 지수 반등 시)."""
+    inverse_positions = {
+        c: p for c, p in monitor.positions.items()
+        if p.get("is_crash_inverse") and not p.get("manual")
+    }
+    if not inverse_positions:
+        return
+
+    n = now_kst()
+    force_hh, force_mm = map(int, config.CRASH_FORCE_EXIT_TIME.split(":"))
+    time_force = n.hour > force_hh or (n.hour == force_hh and n.minute >= force_mm)
+
+    # 지수 반등 감지
+    recovery_force = False
+    if _crash_sentinel_state["triggered_today"] and _crash_sentinel_state["entry_kosdaq_level"] < 0:
+        try:
+            kosdaq = kis.get_kosdaq_index()
+            kosdaq_now = float(kosdaq.get("change_rate", "0"))
+            entry_level = _crash_sentinel_state["entry_kosdaq_level"]
+            # 하락폭의 N% 이상 회복했으면 반등 청산
+            recovery_pct = 0
+            if entry_level < 0:
+                recovery_pct = (1 - kosdaq_now / entry_level) * 100
+            if recovery_pct >= config.CRASH_RECOVERY_EXIT_PCT:
+                recovery_force = True
+                logger.info(
+                    "KOSDAQ 반등 감지: 진입 시 %+.1f%% → 현재 %+.1f%% (회복 %.0f%%)",
+                    entry_level, kosdaq_now, recovery_pct,
+                )
+        except Exception as e:
+            logger.warning("반등 감지 KOSDAQ 조회 실패: %s", e)
+
+    if not time_force and not recovery_force:
+        return
+
+    reason = (
+        "지수 반등 — 인버스 청산" if recovery_force
+        else f"장 마감 전 강제 청산 ({config.CRASH_FORCE_EXIT_TIME})"
+    )
+
+    for code, pos in list(inverse_positions.items()):
+        try:
+            price_data = kis.get_current_price(code)
+            current = price_data["price"]
+            entry = pos["entry_price"]
+            qty = pos["remaining_qty"]
+            pnl_pct = (current - entry) / entry * 100 if entry else 0
+            pnl_amt = int((current - entry) * qty)
+
+            bot.send_message(
+                f"🔔 <b>{pos['name']} 인버스 청산</b>\n\n"
+                f"사유: {reason}\n"
+                f"체결가: {current:,}원 × {qty}주\n"
+                f"수익: {pnl_pct:+.1f}% ({pnl_amt:+,}원)"
+            )
+
+            sell_result = kis.place_sell_order(code, qty)
+            if sell_result.get("rt_cd") == "0":
+                monitor.trades_today.append({
+                    "code": code,
+                    "name": pos["name"],
+                    "action": "sell",
+                    "quantity": qty,
+                    "entry_price": entry,
+                    "exit_price": current,
+                    "pnl_pct": pnl_pct,
+                    "pnl_amt": pnl_amt,
+                    "reason": reason,
+                    "phase": "crash_inverse",
+                })
+                monitor.remove_position(code)
+                if db:
+                    db.save_trade(code, pos["name"], "sell", qty, current, reason=reason)
+            else:
+                bot.send_message(f"⚠️ {pos['name']} 인버스 청산 실패: {sell_result.get('msg1', '')}")
+        except Exception as e:
+            logger.error("인버스 강제 청산 실패 %s: %s", pos["name"], e)
+            bot.send_message(f"⚠️ {pos['name']} 인버스 청산 오류: {e}")
+
 
 def _run_sentiment_check(naver_news, analyzer, bot):
     """08:55 뉴스 센티먼트 분석 (장 시작 전 사전 판단)."""
@@ -1193,6 +1502,116 @@ def _should_run_afternoon(monitor: PositionMonitor) -> bool:
     return True
 
 
+def _try_pyramid(
+    kis: KISClient,
+    bot: TelegramBot,
+    trader: Trader,
+    monitor: PositionMonitor,
+) -> bool:
+    """수익 중인 보유 종목 추가매수 (피라미딩). 추가매수 시 True 반환."""
+    if not config.PYRAMID_ENABLED:
+        return False
+
+    try:
+        available_cash = kis.get_available_cash()
+    except Exception:
+        return False
+
+    if available_cash < config.MIN_REINVEST_CASH:
+        return False
+
+    for code, pos in list(monitor.positions.items()):
+        if pos.get("manual") or pos.get("is_crash_inverse"):
+            continue
+
+        pyramid_count = pos.get("pyramid_count", 0)
+        if pyramid_count >= config.PYRAMID_MAX_ADDS:
+            continue
+
+        try:
+            price_data = kis.get_current_price(code)
+            current = price_data["price"]
+        except Exception:
+            continue
+
+        entry = pos["entry_price"]
+        if entry <= 0:
+            continue
+        pnl_pct = (current - entry) / entry * 100
+
+        if pnl_pct < config.PYRAMID_MIN_PROFIT_PCT:
+            continue
+
+        # 모멘텀 확인: 현재가가 직전 고점 대비 -1% 이내 (상승 중)
+        if config.PYRAMID_MOMENTUM_CHECK:
+            high = pos.get("high_since_entry", entry)
+            if high > 0 and current < high * 0.99:
+                logger.info(
+                    "피라미딩 스킵 %s — 고점 대비 하락 중 (현재 %s, 고점 %s)",
+                    pos["name"], f"{current:,}", f"{high:,}",
+                )
+                continue
+
+        # 추가매수 실행
+        position_cash = int(available_cash * config.PYRAMID_POSITION_PCT / 100)
+        order_price = round_to_tick(int(current * 1.01))
+        quantity = position_cash // order_price
+        if quantity <= 0:
+            continue
+
+        stop_loss = pos["stop_loss"]  # 기존 손절선 유지
+
+        bot.send_message(
+            f"📈 <b>{pos['name']} 피라미딩 추가매수</b>\n\n"
+            f"현재 수익: {pnl_pct:+.1f}%\n"
+            f"기존: {pos['remaining_qty']}주 @ {entry:,}원\n"
+            f"추가: {quantity}주 @ {order_price:,}원 ({position_cash:,}원)\n"
+            f"피라미딩 {pyramid_count + 1}/{config.PYRAMID_MAX_ADDS}차"
+        )
+
+        order = {
+            "stock_code": code,
+            "name": pos["name"],
+            "price": order_price,
+            "quantity": quantity,
+            "stop_loss": stop_loss,
+            "reason": f"피라미딩 {pyramid_count + 1}차 (+{pnl_pct:.1f}%)",
+        }
+
+        fills = trader.execute_buy_orders([order])
+        if not fills:
+            bot.send_message(f"⚠️ {pos['name']} 피라미딩 매수 실패")
+            continue
+
+        for f in fills:
+            fill_price = f["avg_price"]
+            # 평균 단가 + 수량 업데이트 (add_position이 자동 처리)
+            monitor.add_position(
+                stock_code=f["stock_code"],
+                name=f["name"],
+                quantity=f["quantity"],
+                entry_price=fill_price,
+                target1=0,
+                target2=0,
+                stop_loss=stop_loss,
+                phase="pyramid",
+            )
+            # 피라미딩 횟수 기록
+            if f["stock_code"] in monitor.positions:
+                monitor.positions[f["stock_code"]]["pyramid_count"] = pyramid_count + 1
+                monitor.positions[f["stock_code"]].setdefault("is_momentum", True)
+
+            bot.send_message(
+                f"✅ <b>{f['name']} 피라미딩 체결</b>\n\n"
+                f"체결: {fill_price:,}원 × {f['quantity']}주\n"
+                f"총 보유: {monitor.positions.get(f['stock_code'], {}).get('remaining_qty', 0)}주"
+            )
+
+        return True  # 한 종목만 피라미딩 (리스크 관리)
+
+    return False
+
+
 def _try_reinvest(
     kis: KISClient,
     bot: TelegramBot,
@@ -1206,6 +1625,11 @@ def _try_reinvest(
     cutoff_fn = _past_afternoon_cutoff if phase == "afternoon" else _past_entry_cutoff
     if cutoff_fn():
         return
+
+    # 수익 종목 피라미딩 우선 시도
+    if _try_pyramid(kis, bot, trader, monitor):
+        return  # 피라미딩 했으면 이번 턴은 끝
+
     try:
         remaining_cash = kis.get_available_cash()
     except Exception as e:
@@ -1364,6 +1788,15 @@ def run_daily_cycle():
     analyzer = AIAnalyzer(ai_key, provider=config.AI_PROVIDER)
     trader = Trader(kis, bot, db)
     monitor = PositionMonitor(kis, bot, db)
+
+    # 크래시 센티널용 DB 참조 설정
+    global _crash_db_ref, _crash_sentinel_state
+    _crash_db_ref = db
+    # 일일 상태 리셋
+    _crash_sentinel_state = {
+        "entries_today": 0, "stage": 0, "kosdaq_history": [],
+        "last_check": 0, "triggered_today": False, "entry_kosdaq_level": 0,
+    }
 
     # 오전 급등주 데이터 복구 (장중 재시작 대비)
     _load_morning_top_movers()
@@ -1651,6 +2084,13 @@ def run_daily_cycle():
                     bot.process_updates(kis, monitor)
                 except Exception:
                     pass
+                # 쿨다운 중에도 크래시 센티널 감시
+                try:
+                    _crash_sentinel_check(
+                        kis, bot, collector, trader, monitor, db
+                    )
+                except Exception:
+                    pass
                 if monitor.should_stop or _past_entry_cutoff():
                     break
                 time.sleep(max(0, min(30, cooldown_end - time.time())))
@@ -1702,8 +2142,85 @@ def run_daily_cycle():
                 consecutive_losses,
             )
 
+    # --- 크래시 센티널 대기 루프: 모든 전략 종료 후에도 장중 인버스 감시 ---
+    if (
+        config.CRASH_MODE_ENABLED
+        and not config.DRY_RUN
+        and not monitor.should_stop
+        and is_market_hours()
+    ):
+        _run_crash_sentinel_idle(
+            kis, bot, collector, trader, monitor, db, sold_codes
+        )
+
     _send_daily_report(monitor, bot, db)
     return bot
+
+
+def _run_crash_sentinel_idle(
+    kis: KISClient,
+    bot: TelegramBot,
+    collector: MarketDataCollector,
+    trader: Trader,
+    monitor: PositionMonitor,
+    db: Database,
+    sold_codes: set,
+):
+    """전략 종료 후 ~ 장 마감까지 크래시 센티널만 가동하는 대기 루프."""
+    logger.info("크래시 센티널 대기 모드 진입 (장 마감까지 인버스 감시)")
+    bot.send_message(
+        "👁 크래시 센티널 대기 모드\n"
+        "전략 종료 — 장 마감까지 KOSDAQ 폭락 감시 중"
+    )
+
+    while True:
+        n = now_kst()
+        if n.hour >= 15 and n.minute >= 35:
+            logger.info("장 마감 — 크래시 센티널 종료")
+            break
+        if monitor.should_stop:
+            logger.info("사용자 /stop — 크래시 센티널 종료")
+            break
+
+        # 인버스 포지션 있으면 모니터링 (트레일링 스탑 등)
+        inverse_active = {
+            c: p for c, p in monitor.positions.items()
+            if p.get("is_crash_inverse") and not p.get("manual")
+        }
+        if inverse_active and is_market_hours():
+            try:
+                monitor.check_positions()
+            except Exception as e:
+                logger.warning("크래시 센티널 포지션 체크 오류: %s", e)
+
+        # 크래시 감시
+        if is_market_hours():
+            try:
+                entered = _crash_sentinel_check(
+                    kis, bot, collector, trader, monitor, db
+                )
+                if entered:
+                    # 진입 성공 → 모니터링 루프로 전환
+                    _run_monitoring_loop(
+                        monitor, bot, kis, collector, None, trader,
+                        sold_codes, phase="crash_inverse",
+                    )
+            except Exception as e:
+                logger.warning("크래시 센티널 오류: %s", e)
+
+            # 인버스 강제 청산 체크
+            try:
+                _crash_force_exit_check(kis, bot, monitor, db)
+            except Exception as e:
+                logger.warning("인버스 강제 청산 오류: %s", e)
+
+        # 텔레그램 명령 처리
+        try:
+            bot.process_updates(kis, monitor)
+        except Exception:
+            pass
+
+        time.sleep(config.CRASH_SENTINEL_INTERVAL)
 
 
 def _run_afternoon_phase(
@@ -1843,6 +2360,13 @@ def _run_afternoon_phase(
             while time.time() < cooldown_end:
                 try:
                     bot.process_updates(kis, monitor)
+                except Exception:
+                    pass
+                # 오후 쿨다운 중에도 크래시 센티널 감시
+                try:
+                    _crash_sentinel_check(
+                        kis, bot, collector, trader, monitor, db
+                    )
                 except Exception:
                     pass
                 if monitor.should_stop or _past_afternoon_cutoff():
@@ -2361,6 +2885,21 @@ def _run_monitoring_loop(
                     ):
                         sold_codes.add(t["code"])
                 last_reinvest = 0
+
+            # 크래시 센티널: 장중 상시 인버스 감시
+            if collector and trader and _crash_db_ref:
+                try:
+                    _crash_sentinel_check(
+                        kis, bot, collector, trader, monitor, _crash_db_ref
+                    )
+                except Exception as e:
+                    logger.warning("크래시 센티널 오류: %s", e)
+
+            # 인버스 포지션 강제 청산 체크
+            try:
+                _crash_force_exit_check(kis, bot, monitor, _crash_db_ref)
+            except Exception as e:
+                logger.warning("인버스 강제 청산 오류: %s", e)
 
         try:
             bot.process_updates(kis, monitor)
