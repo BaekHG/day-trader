@@ -231,7 +231,10 @@ class PositionMonitor:
                 )
                 continue
 
+            effective_stop = pos["stop_loss"]
+
             # === Step 3: 시간정지 체크 ===
+            hold_minutes = 0
             entry_time_str = pos.get("entry_time", "")
             if entry_time_str:
                 entry_dt = datetime.fromisoformat(entry_time_str)
