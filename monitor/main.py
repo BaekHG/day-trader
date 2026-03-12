@@ -715,8 +715,8 @@ def _try_momentum_entry(
     if not config.MOMENTUM_ENABLED:
         return None
 
-    active_positions = sum(1 for p in monitor.positions.values() if not p.get("manual"))
-    if active_positions >= config.MAX_PICKS:
+    # 보유 종목 있으면 신규 진입 차단 (수동 포함 — 한 종목 전액 올인 전략)
+    if monitor.positions:
         return None
 
     kosdaq = market_data.get("kosdaq_index", {})
@@ -1032,14 +1032,12 @@ def _try_momentum_entry(
         logger.warning("예수금 조회 실패 — 모멘텀 진입 스킵")
         return None
 
-    if boosted:
-        pos_pct = config.BOOST_MAX_POSITION_PCT
-    elif late:
-        pos_pct = config.LATE_SESSION_POSITION_PCT
-    else:
-        pos_pct = config.MAX_POSITION_PCT
-    # 비대칭 R:R: entry_quality에 따라 포지션 스케일링
-    position_cash = int(available_cash * pos_pct / 100 * eq_position_scale)
+    logger.info(
+        "KIS 예수금: %s원 | 현재가: %s원 | 전액 투입",
+        f"{available_cash:,}",
+        f"{cur_price:,}",
+    )
+    position_cash = available_cash
     quantity = position_cash // cur_price
     if quantity <= 0:
         logger.info("모멘텀 주문 가능 수량 0주 — 스킵")
@@ -1153,7 +1151,7 @@ def _try_momentum_entry(
         f"",
         f"\U0001f4b0 <b>주문</b>",
         f"{quantity}주 × {order_price:,}원 (상한지정가)",
-        f"투입: {quantity * order_price:,}원 (자본 {pos_pct}%)",
+        f"투입: {quantity * order_price:,}원 (예수금 {available_cash:,}원 전액)",
         f"손절: {stop_loss:,}원 (-{stop_pct}%)",
     ]
     bot.send_message("\n".join(reasons))
@@ -1245,8 +1243,8 @@ def _try_pullback_entry(
         logger.info("눌림목 — 오전 급등주 기록 없음")
         return None
 
-    active_positions = sum(1 for p in monitor.positions.values() if not p.get("manual"))
-    if active_positions >= config.MAX_PICKS:
+    # 보유 종목 있으면 신규 진입 차단 (수동 포함 — 한 종목 전액 올인 전략)
+    if monitor.positions:
         return None
 
     logger.info("눌림목 스캔 — 오전 급등주 %d종목 확인", len(_morning_top_movers))
@@ -1340,13 +1338,7 @@ def _try_pullback_entry(
             logger.warning("예수금 조회 실패 — 눌림목 진입 스킵")
             continue
 
-        # 비대칭 R:R: entry_quality에 따라 포지션 스케일링
-        position_cash = int(
-            available_cash
-            * config.AFTERNOON_MAX_POSITION_PCT
-            / 100
-            * pb_eq_position_scale
-        )
+        position_cash = int(available_cash * config.AFTERNOON_MAX_POSITION_PCT / 100)
         order_price = round_to_tick(int(current * 1.005))
         quantity = position_cash // order_price
         if quantity <= 0:
@@ -1659,118 +1651,7 @@ def _try_reinvest(
     if cutoff_fn():
         return
 
-    # 수익 종목 피라미딩 우선 시도
-    if _try_pyramid(kis, bot, trader, monitor):
-        return  # 피라미딩 했으면 이번 턴은 끝
-
-    try:
-        remaining_cash = kis.get_available_cash()
-    except Exception as e:
-        logger.warning("잔여 현금 조회 실패: %s", e)
-        return
-    if remaining_cash < config.MIN_REINVEST_CASH:
-        return
-
-    skip_codes = set(monitor.positions.keys()) | sold_codes
-    logger.info("잔여 현금 재투자 — %s원 추가 종목 탐색", f"{remaining_cash:,}")
-    bot.send_message(f"💰 잔여 현금 {remaining_cash:,}원 — 추가 종목 분석")
-
-    try:
-        mdata = collector.fetch_market_data(phase=phase)
-        enr = collector.enrich_stocks(
-            mdata["volume_ranking"],
-            mdata["stock_news"],
-            mdata["is_market_open"],
-            phase=phase,
-        )
-        if not enr:
-            bot.send_message("📊 하드 필터 통과 종목 없음 — 재투자 건너뜀")
-            return
-        reinvest_pos = [
-            {"name": p["name"], "code": c, "remaining_qty": p["remaining_qty"]}
-            for c, p in monitor.positions.items()
-        ]
-        anal = analyzer.analyze(
-            enriched_stocks=enr,
-            up_ranking=mdata["up_ranking"],
-            down_ranking=mdata["down_ranking"],
-            kospi_index=mdata["kospi_index"],
-            kosdaq_index=mdata["kosdaq_index"],
-            exchange_rate=mdata["exchange_rate"],
-            is_market_open=mdata["is_market_open"],
-            current_positions=reinvest_pos or None,
-        )
-        anal["_kospi"] = mdata["kospi_index"]
-        anal["_kosdaq"] = mdata["kosdaq_index"]
-        anal["_exchange_rate"] = mdata["exchange_rate"]
-        bot.send_analysis_result(anal, remaining_cash)
-
-        rec = anal.get("marketAssessment", {}).get("recommendation", "")
-        if rec == "매매비추천":
-            return
-
-        new_picks = [p for p in anal.get("picks", []) if p["symbol"] not in skip_codes]
-        if not new_picks:
-            bot.send_message("추가 매수 대상 없음")
-            return
-
-        new_orders = trader.calculate_orders(new_picks, remaining_cash, skip_codes)
-        if not new_orders:
-            return
-
-        bot.send_buy_orders(new_orders)
-        new_results = trader.execute_buy_orders(new_orders)
-        new_success = [r for r in new_results if r["success"]]
-        if not new_success:
-            return
-
-        new_map = {o["stock_code"]: o for o in new_success}
-        new_fills = []
-        for attempt in range(4):
-            time.sleep(15)
-            result = trader.check_fills(new_success)
-            if result is None:
-                continue
-            new_fills = result
-            if len(new_fills) >= len(new_success):
-                break
-        if new_fills:
-            bot.send_fill_confirmation(new_fills)
-            for nf in new_fills:
-                mo = new_map.get(nf["stock_code"])
-                if mo:
-                    adjusted_stop = _recalc_stop_loss(
-                        nf["price"],
-                        mo["price"],
-                        mo["stop_loss"],
-                    )
-                    monitor.add_position(
-                        stock_code=nf["stock_code"],
-                        name=nf["name"],
-                        quantity=nf["quantity"],
-                        entry_price=nf["price"],
-                        target1=mo["target1"],
-                        target2=mo["target2"],
-                        stop_loss=adjusted_stop,
-                        sell_strategy=mo.get("sell_strategy"),
-                        entry_quality="standard",
-                    )
-
-        filled_codes = {nf["stock_code"] for nf in new_fills}
-        unfilled = [o for o in new_success if o["stock_code"] not in filled_codes]
-        if unfilled:
-            try:
-                pending = kis.get_pending_orders()
-                unfilled_codes = {o["stock_code"] for o in unfilled}
-                to_cancel = [p for p in pending if p["stock_code"] in unfilled_codes]
-                if to_cancel:
-                    trader.cancel_unfilled_orders(to_cancel)
-                    names = ", ".join(p["name"] for p in to_cancel)
-                    bot.send_message(f"⏳ 미체결 자동 취소: {names}")
-            except Exception as e:
-                logger.error("미체결 취소 실패: %s", e)
-    except Exception as e:
-        logger.error("잔여 현금 재투자 실패: %s", e)
+    _try_pyramid(kis, bot, trader, monitor)
 
 
 def _get_daily_pnl_pct(monitor: PositionMonitor) -> float:
@@ -2341,8 +2222,7 @@ def _run_afternoon_phase(
             bot.send_message(f"🛑 일일 손실한도 ({daily_pnl:.1f}%) — 오후 중단")
             break
 
-        active = {k: v for k, v in monitor.positions.items() if not v.get("manual")}
-        if not active:
+        if not monitor.positions:
             entered = False
 
             # 1) 눌림목 먼저 시도
@@ -2452,8 +2332,7 @@ def _run_one_cycle(
 
     logger.info("enriched %d 종목", len(enriched))
 
-    active = {k: v for k, v in monitor.positions.items() if not v.get("manual")}
-    if not active:
+    if not monitor.positions:
         momentum_result = _try_momentum_entry(
             kis,
             bot,

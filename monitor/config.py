@@ -164,8 +164,8 @@ PYRAMID_MOMENTUM_CHECK = (
 # --- 포지션 사이징 ---
 MAX_PICKS = int(os.getenv("MAX_PICKS", "1"))  # 최대 동시 보유 종목 수
 MAX_POSITION_PCT = int(
-    os.getenv("MAX_POSITION_PCT", "95")
-)  # 종목당 자본 배분 한도 (%) — 올인
+    os.getenv("MAX_POSITION_PCT", "100")
+)  # 종목당 자본 배분 한도 (%) — 전액 올인
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
