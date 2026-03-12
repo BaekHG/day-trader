@@ -1903,15 +1903,7 @@ def run_daily_cycle():
             logger.info("일일 손실한도 도달 (%.1f%%) — 사이클 중단", daily_pnl)
             bot.send_message(f"🛑 일일 손실한도 도달 ({daily_pnl:.1f}%) — 매매 중단")
             break
-        profit_target = (
-            config.BOOST_DAILY_PROFIT_TARGET_PCT
-            if _boost_state["active"]
-            else config.DAILY_PROFIT_TARGET_PCT
-        )
-        if daily_pnl >= profit_target:
-            logger.info("일일 수익목표 달성 (%.1f%%) — 사이클 중단", daily_pnl)
-            bot.send_message(f"🎯 일일 수익목표 달성 ({daily_pnl:.1f}%) — 매매 중단")
-            break
+        # 일일 수익 리밋 비활성화 (자산 불리기 모드)
         if consecutive_losses >= config.MAX_CONSECUTIVE_LOSSES:
             logger.info("%d연패 — 당일 매매 중단", consecutive_losses)
             bot.send_message(
@@ -1945,20 +1937,7 @@ def run_daily_cycle():
                 consecutive_losses += 1
             else:
                 consecutive_losses = 0
-                # 단일 거래 수익 +N% 이상 → 당일 종료 (돈 지킨다)
-                profit_stop = (
-                    config.BOOST_FIRST_PROFIT_STOP_PCT
-                    if _boost_state["active"]
-                    else config.FIRST_PROFIT_STOP_PCT
-                )
-                if last_pnl_pct >= profit_stop:
-                    logger.info("수익 확보 +%.1f%% → 당일 매매 종료", last_pnl_pct)
-                    bot.send_message(
-                        f"🎯 <b>수익 확보 — 당일 매매 종료</b>\n\n"
-                        f"수익률: {last_pnl_pct:+.1f}% ({last_pnl:+,}원)\n"
-                        f"돈 지킵니다. 내일 또 보곜요. 💪"
-                    )
-                    break
+                # 단일거래 수익정지 비활성화 (자산 불리기 모드)
 
         # 재시도 가능한 결과: 쿨다운 후 다음 사이클
         retryable = (

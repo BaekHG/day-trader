@@ -128,8 +128,8 @@ MAX_HOLD_MINUTES = int(os.getenv("MAX_HOLD_MINUTES", "30"))
 # --- 일일 리스크 관리 (보수적) ---
 DAILY_LOSS_LIMIT_PCT = float(os.getenv("DAILY_LOSS_LIMIT_PCT", "-1.5"))
 DAILY_PROFIT_TARGET_PCT = float(
-    os.getenv("DAILY_PROFIT_TARGET_PCT", "5.0")
-)  # 일일 누적 수익 상한 (안전망)
+    os.getenv("DAILY_PROFIT_TARGET_PCT", "999.0")
+)  # 일일 수익 리밋 비활성화 — 자산 불리기 모드
 MAX_CONSECUTIVE_LOSSES = int(
     os.getenv("MAX_CONSECUTIVE_LOSSES", "4")
 )  # 2→4: 공격적 전략 — 4연패까지 허용
@@ -139,8 +139,8 @@ MIN_CONFIDENCE_AFTER_LOSS = int(
 
 # --- 사이클별 분기 전략 ---
 FIRST_PROFIT_STOP_PCT = float(
-    os.getenv("FIRST_PROFIT_STOP_PCT", "3.0")
-)  # 단일 거래 +3% 이상 → 당일 종료
+    os.getenv("FIRST_PROFIT_STOP_PCT", "999.0")
+)  # 단일거래 수익정지 비활성화 — 자산 불리기 모드
 AFTER_LOSS_MIN_SCORE = int(
     os.getenv("AFTER_LOSS_MIN_SCORE", "65")
 )  # 손절 후 다음 진입 최소 모멘텀 스코어
@@ -403,8 +403,8 @@ BOOST_STOP_LOSS_PCT = float(
     os.getenv("BOOST_STOP_LOSS_PCT", "3.5")
 )  # 손절 -3.5% (숨 여유)
 BOOST_FIRST_PROFIT_STOP_PCT = float(
-    os.getenv("BOOST_FIRST_PROFIT_STOP_PCT", "5.0")
-)  # +5% 이상 시 종료
+    os.getenv("BOOST_FIRST_PROFIT_STOP_PCT", "999.0")
+)  # 불장 수익정지 비활성화 — 자산 불리기 모드
 BOOST_NO_NEW_ENTRY_AFTER = os.getenv(
     "BOOST_NO_NEW_ENTRY_AFTER", "14:30"
 )  # 14:30까지 신규 진입 허용 (NO_NEW_ENTRY_AFTER와 동일 — 불장이면 더 공격적)
@@ -413,8 +413,8 @@ BOOST_HARD_FILTER_CHANGE_MAX = float(
     os.getenv("BOOST_HARD_FILTER_CHANGE_MAX", "14.0")
 )  # 불장 모드 하드필터 상한 (평시 8% → 14%)
 BOOST_DAILY_PROFIT_TARGET_PCT = float(
-    os.getenv("BOOST_DAILY_PROFIT_TARGET_PCT", "8.0")
-)  # 일일 수익 상한 8%
+    os.getenv("BOOST_DAILY_PROFIT_TARGET_PCT", "999.0")
+)  # 불장 일일 수익 리밋 비활성화 — 자산 불리기 모드
 BOOST_THEME_SCORE_BONUS = float(
     os.getenv("BOOST_THEME_SCORE_BONUS", "1.2")
 )  # 수혜테마 종목 스코어 +20%
