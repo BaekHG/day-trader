@@ -104,7 +104,8 @@ class Trader:
     def execute_buy_orders(self, orders: list[dict]) -> list[dict]:
         results = []
         for order in orders:
-            if not claim_stock_for_buy(order["stock_code"]):
+            is_pyramid = order.get("reason", "").startswith("피라미딩")
+            if not is_pyramid and not claim_stock_for_buy(order["stock_code"]):
                 msg = "다른 봇이 이미 매수 — 중복 방지 스킵"
                 logger.info("%s %s", order["name"], msg)
                 self.bot.send_message(f"🔒 {order['name']} {msg}")
