@@ -115,12 +115,16 @@ class PositionMonitor:
 
     def _check_positions_locked(self):
         now = datetime.now(KST)
-        force_hh, force_mm = map(
-            int, config.FORCE_CLOSE_TIME.split(":")
-        )  # 15:10 — 손실 종목 청산
+
+        _boosted = False
+        try:
+            import main as _main_mod
+
+            _boosted = getattr(_main_mod, "_boost_state", {}).get("active", False)
+        except Exception:
+            pass
 
         for code, pos in list(self.positions.items()):
-            # 수동 매수 포지션은 모니터링 완전 스킵 (유저가 직접 관리)
             if pos.get("manual"):
                 continue
             try:
@@ -159,16 +163,22 @@ class PositionMonitor:
                     )
                     continue
 
-            # === Step 1: 장 마감 2단계 청산 (기존 100% 유지) ===
-            final_hh, final_mm = map(int, config.FINAL_CLOSE_TIME.split(":"))  # 15:20
+            # === Step 1: 장 마감 2단계 청산 ===
+            _final_time = (
+                config.BOOST_FINAL_CLOSE_TIME if _boosted else config.FINAL_CLOSE_TIME
+            )
+            _force_time = (
+                config.BOOST_FORCE_CLOSE_TIME if _boosted else config.FORCE_CLOSE_TIME
+            )
+            final_hh, final_mm = map(int, _final_time.split(":"))
+            _force_hh, _force_mm = map(int, _force_time.split(":"))
             is_final = now.hour > final_hh or (
                 now.hour == final_hh and now.minute >= final_mm
             )
-            is_force = now.hour > force_hh or (
-                now.hour == force_hh and now.minute >= force_mm
+            is_force = now.hour > _force_hh or (
+                now.hour == _force_hh and now.minute >= _force_mm
             )
             if is_final:
-                # 15:20 — 수익 종목은 무조건 오버나이트, 손실만 청산
                 if pnl_pct > 0:
                     pos["overnight"] = True
                     pos["overnight_close_price"] = current
@@ -196,29 +206,39 @@ class PositionMonitor:
                     pos,
                     remaining,
                     current,
-                    f"{config.FINAL_CLOSE_TIME} 손실 종목 장마감 청산",
+                    f"{_final_time} 손실 종목 장마감 청산",
                     pnl_pct,
                 )
                 continue
             elif is_force and pnl_pct <= 0:
-                # 15:10 — 손실 종목만 청산 (수익 종목은 트레일링 유지)
-                self._execute_sell(
-                    code,
-                    pos,
-                    remaining,
-                    current,
-                    f"{config.FORCE_CLOSE_TIME} 손실 청산 (수익종목 트레일링 유지)",
-                    pnl_pct,
-                )
-                continue
+                if _boosted:
+                    logger.info(
+                        "%s 불장모드 — 손실 %.1f%%이지만 트레일링 유지 (%s 이후 청산)",
+                        pos["name"],
+                        pnl_pct,
+                        _final_time,
+                    )
+                else:
+                    self._execute_sell(
+                        code,
+                        pos,
+                        remaining,
+                        current,
+                        f"{_force_time} 손실 청산 (수익종목 트레일링 유지)",
+                        pnl_pct,
+                    )
+                    continue
 
             # === Step 2: 타이트 손절 체크 (entry_quality 기반) ===
             eq = pos.get("entry_quality", "standard")
-            stop_pct = config.TIGHT_STOP_LOSS_PCT
-            for signal_name, pct in config.TIGHT_STOP_BY_SIGNAL:
-                if signal_name == eq:
-                    stop_pct = pct
-                    break
+            if _boosted:
+                stop_pct = config.BOOST_STOP_LOSS_PCT
+            else:
+                stop_pct = config.TIGHT_STOP_LOSS_PCT
+                for signal_name, pct in config.TIGHT_STOP_BY_SIGNAL:
+                    if signal_name == eq:
+                        stop_pct = pct
+                        break
             tight_stop = int(entry * (1 - stop_pct / 100))
             if current <= tight_stop:
                 self._execute_sell(
@@ -239,8 +259,10 @@ class PositionMonitor:
             if entry_time_str:
                 entry_dt = datetime.fromisoformat(entry_time_str)
                 hold_minutes = (now - entry_dt).total_seconds() / 60
-                # 횡보 정지: N분 동안 거의 움직이지 않음
-                if hold_minutes >= config.TIME_STOP_FLAT_MINUTES:
+                _flat_enabled = (
+                    config.BOOST_TIME_STOP_FLAT_ENABLED if _boosted else True
+                )
+                if _flat_enabled and hold_minutes >= config.TIME_STOP_FLAT_MINUTES:
                     if abs(pnl_pct) <= config.TIME_STOP_FLAT_THRESHOLD_PCT:
                         self._execute_sell(
                             code,
@@ -252,9 +274,10 @@ class PositionMonitor:
                         )
                         continue
 
-            # === Step 4: 모멘텀 시가 하회 (기존 유지) ===
+            # === Step 4: 모멘텀 시가 하회 ===
             is_momentum = pos.get("is_momentum", False)
-            if is_momentum:
+            _open_break = not _boosted or config.BOOST_OPEN_BREAK_EXIT
+            if is_momentum and _open_break:
                 today_open = pos.get("today_open", 0)
                 if today_open > 0 and current < today_open:
                     self._execute_sell(
@@ -268,8 +291,11 @@ class PositionMonitor:
                     continue
 
             # === Step 5: 티어드 분할매도 ===
-            # 장 초반 모멘텀 보호: grace period 내에는 분할매도 유예
-            grace_minutes = getattr(config, "MOMENTUM_HOLD_GRACE_MINUTES", 0)
+            grace_minutes = (
+                config.BOOST_GRACE_MINUTES
+                if _boosted
+                else getattr(config, "MOMENTUM_HOLD_GRACE_MINUTES", 0)
+            )
             in_grace = is_momentum and hold_minutes < grace_minutes and pnl_pct > 0
             if in_grace:
                 logger.info(
@@ -309,9 +335,12 @@ class PositionMonitor:
                         break  # 한 사이클에 한 티어만
 
             # === Step 6: VWAP 이탈 정지 (3사이클에 1번 체크) ===
+            _vwap_enabled = (
+                config.BOOST_VWAP_EXIT if _boosted else config.VWAP_EXIT_BELOW
+            )
             vwap_counter = pos.get("_vwap_check_counter", 0) + 1
             pos["_vwap_check_counter"] = vwap_counter
-            if vwap_counter % 3 == 0 and config.VWAP_EXIT_BELOW:
+            if vwap_counter % 3 == 0 and _vwap_enabled:
                 try:
                     from market_data import calculate_vwap
 
@@ -345,9 +374,14 @@ class PositionMonitor:
                     logger.warning("VWAP 이탈 체크 실패 %s: %s", pos["name"], e)
 
             # === Step 7: 수급 반전 정지 (20사이클에 1번 체크) ===
+            _flow_enabled = (
+                config.BOOST_FLOW_REVERSAL_EXIT
+                if _boosted
+                else config.FLOW_REVERSAL_EXIT
+            )
             flow_counter = pos.get("_flow_check_counter", 0) + 1
             pos["_flow_check_counter"] = flow_counter
-            if flow_counter % 20 == 0 and config.FLOW_REVERSAL_EXIT:
+            if flow_counter % 20 == 0 and _flow_enabled:
                 try:
                     from market_data import analyze_institutional_flow
 
@@ -393,16 +427,6 @@ class PositionMonitor:
                         )
                         continue
             elif not config.TIERED_SELL_ENABLED:
-                _boosted = False
-                try:
-                    import main as _main_mod
-
-                    _boosted = getattr(_main_mod, "_boost_state", {}).get(
-                        "active", False
-                    )
-                except Exception:
-                    pass
-
                 if pos.get("is_crash_inverse"):
                     trailing_levels = config.CRASH_TRAILING_STOP_LEVELS
                 elif is_momentum and _boosted:

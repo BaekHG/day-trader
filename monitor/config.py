@@ -425,13 +425,13 @@ BOOST_THEME_SCORE_BONUS = float(
 BOOST_THEME_SCORE_PENALTY = float(
     os.getenv("BOOST_THEME_SCORE_PENALTY", "0.85")
 )  # 피해테마 종목 스코어 -15%
-# 불장 모드 트레일링 스탑 (넓은 숨 여유 — 최대한 늦게, 높을 때 매도)
+# 불장 모드 트레일링 스탑 (극단적 넓은 숨통 — 불장엔 최대한 안 팔고 오래 홀딩)
 BOOST_MOMENTUM_TRAILING_STOP_LEVELS = [
-    (15.0, 12.0),  # +15% 찍으면 최소 +12% 확보 (3% 여유)
-    (10.0, 7.0),  # +10% 찍으면 최소 +7% 확보 (3% 여유)
-    (7.0, 4.0),  # +7%  찍으면 최소 +4% 확보 (3% 여유)
-    (5.0, 2.5),  # +5%  찍으면 최소 +2.5% 확보 (2.5% 여유)
-    (3.0, 0.5),  # +3%  찍으면 최소 +0.5% 확보 (수수료 커버)
+    (20.0, 15.0),  # +20% 찍으면 최소 +15% 확보 (5% 숨통)
+    (15.0, 10.0),  # +15% 찍으면 최소 +10% 확보 (5% 숨통)
+    (10.0, 5.0),  # +10% 찍으면 최소 +5% 확보 (5% 숨통)
+    (7.0, 2.0),  # +7%  찍으면 최소 +2% 확보 (5% 숨통)
+    (5.0, 0.5),  # +5%  찍으면 최소 +0.5% 확보 (수수료 커버)
 ]
 BOOST_TIME_STOP_MINUTES = int(
     os.getenv("BOOST_TIME_STOP_MINUTES", "40")
@@ -439,6 +439,28 @@ BOOST_TIME_STOP_MINUTES = int(
 BOOST_TIME_STOP_MIN_PROFIT = float(
     os.getenv("BOOST_TIME_STOP_MIN_PROFIT", "0.3")
 )  # 40분 후 +0.3% 미만이면 청산
+# 불장 모드 극단 공격 — 대부분 매도 트리거 비활성화, 최소한의 안전장치(하드 손절)만
+BOOST_GRACE_MINUTES = int(
+    os.getenv("BOOST_GRACE_MINUTES", "15")
+)  # 모멘텀 보호 15분 (평시 5분)
+BOOST_FORCE_CLOSE_TIME = os.getenv(
+    "BOOST_FORCE_CLOSE_TIME", "15:25"
+)  # 손실 강제청산 15:25 (평시 15:10)
+BOOST_FINAL_CLOSE_TIME = os.getenv(
+    "BOOST_FINAL_CLOSE_TIME", "15:28"
+)  # 전량 강제청산 15:28 (평시 15:20)
+BOOST_TIME_STOP_FLAT_ENABLED = (
+    os.getenv("BOOST_TIME_STOP_FLAT_ENABLED", "false").lower() == "true"
+)  # 불장 횡보 정지 비활성화
+BOOST_VWAP_EXIT = (
+    os.getenv("BOOST_VWAP_EXIT", "false").lower() == "true"
+)  # 불장 VWAP 이탈 비활성화
+BOOST_FLOW_REVERSAL_EXIT = (
+    os.getenv("BOOST_FLOW_REVERSAL_EXIT", "false").lower() == "true"
+)  # 불장 수급 반전 비활성화
+BOOST_OPEN_BREAK_EXIT = (
+    os.getenv("BOOST_OPEN_BREAK_EXIT", "false").lower() == "true"
+)  # 불장 시가 하회 비활성화
 
 # --- 거래대금 필터 (가격대별 차등) ---
 # 저가주는 거래대금 기준을 낮춰 아이티켐(1~2만원대) 같은 중소형 급등주도 포착
