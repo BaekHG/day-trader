@@ -1026,6 +1026,10 @@ def _try_momentum_entry(
         eq_position_scale = config.ENTRY_QUALITY_POSITION_SCALE.get("standard", 0.7)
         eq_details = "판정 실패 (standard 기본)"
 
+    if entry_quality == "weak":
+        logger.info("%s 진입 품질 weak — 모멘텀 진입 차단 (VWAP/수급 불리)", name)
+        return None
+
     try:
         available_cash = kis.get_available_cash()
     except Exception:
@@ -1331,6 +1335,10 @@ def _try_pullback_entry(
                 "standard", 0.7
             )
             pb_eq_details = "판정 실패 (standard 기본)"
+
+        if pb_entry_quality == "weak":
+            logger.info("%s 눌림목 진입 품질 weak — 진입 차단", code)
+            continue
 
         try:
             available_cash = kis.get_available_cash()
@@ -1935,9 +1943,19 @@ def run_daily_cycle():
             last_pnl_pct = last_trade.get("pnl_pct", 0)
             if last_pnl < 0:
                 consecutive_losses += 1
+                if consecutive_losses >= 2:
+                    cooldown = config.CONSECUTIVE_LOSS_COOLDOWN_SEC
+                    logger.info(
+                        "%d연패 — %d초 쿨다운 (같은 시장에서 연속 진입 방지)",
+                        consecutive_losses,
+                        cooldown,
+                    )
+                    bot.send_message(
+                        f"⏸️ {consecutive_losses}연패 — {cooldown // 60}분 쿨다운"
+                    )
+                    time.sleep(cooldown)
             else:
                 consecutive_losses = 0
-                # 단일거래 수익정지 비활성화 (자산 불리기 모드)
 
         # 재시도 가능한 결과: 쿨다운 후 다음 사이클
         retryable = (

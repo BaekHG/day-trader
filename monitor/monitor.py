@@ -392,8 +392,7 @@ class PositionMonitor:
                             pnl_pct,
                         )
                         continue
-            elif not config.TIERED_SELL_ENABLED and not in_grace:
-                # 티어드 비활성 시 기존 트레일링 유지 (grace 중 수익 트레일링 유예)
+            elif not config.TIERED_SELL_ENABLED:
                 _boosted = False
                 try:
                     import main as _main_mod
